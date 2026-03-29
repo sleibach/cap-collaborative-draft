@@ -1,0 +1,40 @@
+{
+  "name": "cap-collaborative-draft",
+  "version": "1.0.0",
+  "description": "A cds-plugin that enables SAP Fiori Elements Collaborative Draft on CAP Node.js backends",
+  "main": "cds-plugin.js",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "jest --runInBand",
+    "test:watch": "jest --runInBand --watch",
+    "test:e2e": "playwright test",
+    "test:all": "npm test && npm run test:e2e"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/test/integration/**/*.test.js"
+    ],
+    "testTimeout": 30000
+  },
+  "keywords": [
+    "cds",
+    "cap",
+    "fiori",
+    "draft",
+    "collaborative"
+  ],
+  "devDependencies": {
+    "@cap-js/cds-test": "^0.4.1",
+    "@cap-js/sqlite": "^2.2.0",
+    "@playwright/test": "^1.58.2",
+    "@sap/cds-dk": "^9.8.2",
+    "jest": "^30.3.0"
+  },
+  "peerDependencies": {
+    "@sap/cds": ">=8.0"
+  }
+}

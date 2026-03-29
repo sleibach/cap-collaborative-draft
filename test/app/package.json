@@ -1,0 +1,53 @@
+{
+  "name": "collab-draft-test-app",
+  "version": "1.0.0",
+  "description": "Test app for cap-collaborative-draft plugin",
+  "private": true,
+  "scripts": {
+    "start": "cds-serve",
+    "dev": "cds watch",
+    "watch-orders": "cds watch --open orders/webapp/test/flpSandbox.html?sap-ui-xx-viewCache=false"
+  },
+  "dependencies": {
+    "@cap-js-community/websocket": "^1.10.0",
+    "@cap-js/sqlite": "^2.2.0",
+    "@sap/cds": "^9.8.4",
+    "cap-collaborative-draft": "file:../.."
+  },
+  "devDependencies": {
+    "@sap/cds-dk": "^9.8.2"
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "kind": "sqlite",
+        "credentials": {
+          "url": ":memory:"
+        }
+      },
+      "auth": {
+        "kind": "mocked",
+        "users": {
+          "alice": {
+            "roles": []
+          },
+          "bob": {
+            "roles": []
+          },
+          "carol": {
+            "roles": []
+          }
+        }
+      }
+    },
+    "fiori": {
+      "lean_draft": true
+    },
+    "server": {
+      "exit_on_multi_install": false
+    }
+  },
+  "sapux": [
+    "app/orders"
+  ]
+}

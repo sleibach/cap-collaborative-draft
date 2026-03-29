@@ -1,0 +1,18 @@
+{
+  "fiori": {
+    "lean_draft": true
+  },
+  "requires": {
+    "db": {
+      "kind": "sqlite",
+      "credentials": {
+        "url": ":memory:"
+      }
+    }
+  },
+  "log": {
+    "levels": {
+      "collab-draft": "debug"
+    }
+  }
+}
