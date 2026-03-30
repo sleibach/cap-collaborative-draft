@@ -22,7 +22,7 @@ function findCollaborativeDraftEntities(csn) {
             // Only root draft-enabled entities
             if (def['@odata.draft.enabled']) {
                 result.push(name);
-                LOG.info(`Found collaborative draft entity: ${name}`);
+                LOG.debug(`Found collaborative draft entity: ${name}`);
             }
             else {
                 LOG.warn(`Entity ${name} has @CollaborativeDraft.enabled but NOT @odata.draft.enabled — collaborative draft ignored`);
@@ -39,7 +39,7 @@ function augmentModel(csn) {
     const entities = findCollaborativeDraftEntities(csn);
     if (entities.length === 0)
         return;
-    LOG.info(`Augmenting model for ${entities.length} collaborative draft entity(ies)`);
+    LOG.debug(`Augmenting model for ${entities.length} collaborative draft entity(ies)`);
     const defs = csn.definitions;
     // 1. Create DRAFT.DraftParticipants entity if it doesn't exist
     if (!defs['DRAFT.DraftParticipants']) {

@@ -21,7 +21,7 @@ export function findCollaborativeDraftEntities(csn: any): string[] {
       // Only root draft-enabled entities
       if (def['@odata.draft.enabled']) {
         result.push(name)
-        LOG.info(`Found collaborative draft entity: ${name}`)
+        LOG.debug(`Found collaborative draft entity: ${name}`)
       } else {
         LOG.warn(`Entity ${name} has @CollaborativeDraft.enabled but NOT @odata.draft.enabled — collaborative draft ignored`)
       }
@@ -38,7 +38,7 @@ export function augmentModel(csn: any): void {
   const entities = findCollaborativeDraftEntities(csn)
   if (entities.length === 0) return
 
-  LOG.info(`Augmenting model for ${entities.length} collaborative draft entity(ies)`)
+  LOG.debug(`Augmenting model for ${entities.length} collaborative draft entity(ies)`)
 
   const defs = csn.definitions
 

@@ -34,9 +34,9 @@ async function emitCollabEvent(
       userID: userInfo?.id || 'unknown',
       userDescription: userInfo?.name || userInfo?.id || 'Unknown User'
     })
-    LOG.debug(`[collab-draft] Emitted ${eventName} for ${entitySetName}(${entityID}) by ${userInfo?.id || '?'}`)
+    LOG.debug(`Emitted ${eventName} for ${entitySetName}(${entityID}) by ${userInfo?.id || '?'}`)
   } catch (err: any) {
-    LOG.debug(`[collab-draft] WS emit skipped: ${err.message}`)
+    LOG.debug(`WS emit skipped: ${err.message}`)
   }
 }
 
@@ -144,10 +144,10 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
             [req.user.id, draftUUID]
           )
           _collabDraftUUID = draftUUID
-          LOG.debug(`[collab-draft] Pre-set InProcessByUser=${req.user.id} for collab draft ${draftUUID} (event: ${req.event})`)
+          LOG.debug(`Pre-set InProcessByUser=${req.user.id} for collab draft ${draftUUID} (event: ${req.event})`)
         }
       } catch (err: any) {
-        LOG.debug('[collab-draft] Could not pre-set InProcessByUser:', err.message)
+        LOG.debug('Could not pre-set InProcessByUser:', err.message)
       }
     }
 
@@ -158,7 +158,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       if (err.code === '404' && req.event === 'READ' &&
           isCollaborativeTarget(req, collaborativeSubtree) &&
           req.params?.[0]?.IsActiveEntity === false) {
-        LOG.debug(`[collab-draft] Suppressed 404 for draft READ after activation: ${req.params?.[0]?.ID}`)
+        LOG.debug(`Suppressed 404 for draft READ after activation: ${req.params?.[0]?.ID}`)
         return null
       }
       throw err
@@ -187,7 +187,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
     const target = req.target?.actives ?? req.target
     if (!target || target.isDraft) return next()
 
-    LOG.debug(`[collab-draft] EDIT request from ${req.user.id} on ${target.name}`)
+    LOG.debug(`EDIT request from ${req.user.id} on ${target.name}`)
 
     try {
       const draftsTarget = target.drafts
@@ -204,12 +204,12 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       )
 
       if (!draftRow) {
-        LOG.debug(`[collab-draft] No existing draft found — creating new draft for ${req.user.id}`)
+        LOG.debug(`No existing draft found — creating new draft for ${req.user.id}`)
         return next()
       }
 
       const draftUUID: string = draftRow.DraftAdministrativeData_DraftUUID
-      LOG.info(`[collab-draft] User ${req.user.id} joining existing draft ${draftUUID}`)
+      LOG.debug(`User ${req.user.id} joining existing draft ${draftUUID}`)
 
       let isOrig = false
       try {
@@ -247,7 +247,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
 
       return draftData
     } catch (err: any) {
-      LOG.error('[collab-draft] Error in EDIT handler:', err.message)
+      LOG.error('Error in EDIT handler:', err.message)
       return next()
     }
   })
@@ -270,7 +270,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
           )
           draftUUID = row?.DraftAdministrativeData_DraftUUID
         } catch (err: any) {
-          LOG.debug('[collab-draft] Could not look up DraftUUID after EDIT:', err.message)
+          LOG.debug('Could not look up DraftUUID after EDIT:', err.message)
         }
       }
     }
@@ -278,7 +278,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
     if (!draftUUID) return
 
     if (!presence.isParticipant(draftUUID, req.user.id)) {
-      LOG.debug(`[collab-draft] Registering ${req.user.id} as originator of draft ${draftUUID}`)
+      LOG.debug(`Registering ${req.user.id} as originator of draft ${draftUUID}`)
       await presence.join(draftUUID, req.user.id, {
         displayName: getUserDisplayName(req),
         isOriginator: true
@@ -291,7 +291,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
         ['S', draftUUID]
       )
     } catch (err: any) {
-      LOG.debug('[collab-draft] Could not set DraftAccessType:', err.message)
+      LOG.debug('Could not set DraftAccessType:', err.message)
     }
   })
 
@@ -341,7 +341,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
         return
       }
     } catch (err: any) {
-      LOG.error('[collab-draft] Error in PATCH handler:', err.message)
+      LOG.error('Error in PATCH handler:', err.message)
     }
   })
 
@@ -368,7 +368,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
 
       const { valid, issues } = await merge.validateBeforeActivation(draftUUID)
       if (!valid) {
-        LOG.warn(`[collab-draft] Draft ${draftUUID} has consistency issues:`, issues)
+        LOG.warn(`Draft ${draftUUID} has consistency issues:`, issues)
       }
 
       await cds.run(
@@ -377,7 +377,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
           .where({ DraftUUID: draftUUID })
       )
     } catch (err: any) {
-      LOG.error('[collab-draft] Error in draftPrepare handler:', err.message)
+      LOG.error('Error in draftPrepare handler:', err.message)
     }
   })
 
@@ -391,7 +391,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       const draftUUID = await _lookupDraftUUID(req, srv, collaborativeEntities)
       if (!draftUUID) return
 
-      LOG.info(`[collab-draft] User ${req.user.id} activating collaborative draft ${draftUUID}`)
+      LOG.debug(`User ${req.user.id} activating collaborative draft ${draftUUID}`)
 
       await cds.run(
         UPDATE('DRAFT.DraftAdministrativeData')
@@ -399,7 +399,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
           .where({ DraftUUID: draftUUID })
       )
     } catch (err: any) {
-      LOG.error('[collab-draft] Error in draftActivate before handler:', err.message)
+      LOG.error('Error in draftActivate before handler:', err.message)
     }
   })
 
@@ -409,7 +409,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
   srv.after('draftActivate', '*', async function afterCollaborativeActivate(result: any, req: any) {
     if (!isCollaborativeTarget(req, collaborativeEntities)) return
 
-    LOG.debug('[collab-draft] Draft activated — cleaning up collaborative artifacts')
+    LOG.debug('Draft activated — cleaning up collaborative artifacts')
 
     const draftUUID: string | undefined = req._collabDraftUUID
     if (draftUUID) {
@@ -454,16 +454,16 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
         const createdBy = Array.isArray(adminRows) ? adminRows[0]?.CreatedByUser : adminRows?.CreatedByUser
         isOrig = createdBy === req.user.id
       } catch (err: any) {
-        LOG.debug('[collab-draft] Could not look up CreatedByUser for CANCEL:', err.message)
+        LOG.debug('Could not look up CreatedByUser for CANCEL:', err.message)
         isOrig = presence.isOriginator(draftUUID, req.user.id)
       }
 
       if (isOrig) {
-        LOG.info(`[collab-draft] Originator ${req.user.id} cancelling draft ${draftUUID} — removing all participants`)
+        LOG.debug(`Originator ${req.user.id} cancelling draft ${draftUUID} — removing all participants`)
         await merge.cleanup(draftUUID)
         return next()
       } else {
-        LOG.info(`[collab-draft] Participant ${req.user.id} leaving draft ${draftUUID}`)
+        LOG.debug(`Participant ${req.user.id} leaving draft ${draftUUID}`)
         await presence.leave(draftUUID, req.user.id)
         await fieldLocks.releaseLocks(draftUUID, req.user.id)
 
@@ -477,7 +477,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
         return null
       }
     } catch (err: any) {
-      LOG.error('[collab-draft] Error in CANCEL handler:', err.message)
+      LOG.error('Error in CANCEL handler:', err.message)
       return next()
     }
   })
@@ -549,7 +549,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
     }
 
     if (!draftUUID) {
-      LOG.debug('[collab-draft] DraftAdministrativeUser READ: could not resolve DraftUUID from request')
+      LOG.debug('DraftAdministrativeUser READ: could not resolve DraftUUID from request')
       return []
     }
 
@@ -600,7 +600,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
           }))
       }
     } catch (err: any) {
-      LOG.debug('[collab-draft] Could not load DraftAdministrativeUser from DB:', err.message)
+      LOG.debug('Could not load DraftAdministrativeUser from DB:', err.message)
     }
 
     return []
@@ -633,18 +633,18 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
               )
               draftUUID = draftRow?.DraftAdministrativeData_DraftUUID ?? null
             } catch (err: any) {
-              LOG.debug(`[collab-draft] ${actionName}: could not look up DraftUUID:`, err.message)
+              LOG.debug(`${actionName}: could not look up DraftUUID:`, err.message)
             }
           }
         }
       }
 
       if (!draftUUID) {
-        LOG.debug(`[collab-draft] ${actionName} called without DraftUUID — ignoring`)
+        LOG.debug(`${actionName} called without DraftUUID — ignoring`)
         return
       }
 
-      LOG.info(`[collab-draft] ${actionName}: user ${req.user.id} joining draft ${draftUUID}`)
+      LOG.debug(`${actionName}: user ${req.user.id} joining draft ${draftUUID}`)
 
       try {
         if (!presence.isParticipant(draftUUID, req.user.id)) {
@@ -667,7 +667,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
             ['S', draftUUID]
           )
         } catch (err: any) {
-          LOG.debug('[collab-draft] Could not set DraftAccessType in ColDraftShare:', err.message)
+          LOG.debug('Could not set DraftAccessType in ColDraftShare:', err.message)
         }
 
         const entityKeyObj = req.params?.[0]
@@ -709,18 +709,18 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
               }
             }
           } catch (err: any) {
-            LOG.debug('[collab-draft] WS JOIN emit failed:', err.message)
+            LOG.debug('WS JOIN emit failed:', err.message)
           }
         }
       } catch (err: any) {
-        LOG.error(`[collab-draft] Error in ${actionName}:`, err.message)
+        LOG.error(`Error in ${actionName}:`, err.message)
       }
     })
 
-    LOG.debug(`[collab-draft] Registered ${actionName} handler for ${entityName}`)
+    LOG.debug(`Registered ${actionName} handler for ${entityName}`)
   }
 
-  LOG.info(`[collab-draft] Collaborative draft handlers registered for service ${srv.name}`)
+  LOG.debug(`Collaborative draft handlers registered for service ${srv.name}`)
 }
 
 /**

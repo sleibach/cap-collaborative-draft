@@ -103,7 +103,7 @@ function _injectWsServiceIntoCSN(csn) {
         '@ws.pcp.action': 'MESSAGE',
         elements: Object.fromEntries(Object.entries(_msgFields).map(([k, v]) => [k, { ...v, kind: 'element' }]))
     };
-    LOG.debug('[collab-draft] Auto-registered CollabDraftWebSocketService in CSN');
+    LOG.debug('Auto-registered CollabDraftWebSocketService in CSN');
 }
 LOG.info('cap-collaborative-draft plugin loaded');
 //
@@ -159,7 +159,7 @@ cds.on('bootstrap', (app) => {
                     return open + newProps + close;
                 });
                 changed = true;
-                LOG.debug('[collab-draft] Injected CollaborativeDraftEnabled/DraftAccessType into $metadata DraftAdministrativeData EntityType');
+                LOG.debug('Injected CollaborativeDraftEnabled/DraftAccessType into $metadata DraftAdministrativeData EntityType');
             }
             // ── 2. Inject DraftAdministrativeUser NavigationProperty into DraftAdministrativeData ──
             {
@@ -170,7 +170,7 @@ cds.on('bootstrap', (app) => {
                         return open + navProp + close;
                     });
                     changed = true;
-                    LOG.debug('[collab-draft] Injected DraftAdministrativeUser NavigationProperty into $metadata');
+                    LOG.debug('Injected DraftAdministrativeUser NavigationProperty into $metadata');
                 }
             }
             // ── 3. Inject DraftAdministrativeUser EntityType (fallback) ──
@@ -186,7 +186,7 @@ cds.on('bootstrap', (app) => {
                 ].join('');
                 body = body.replace('</Schema>', entityType + '\n</Schema>');
                 changed = true;
-                LOG.debug('[collab-draft] Injected DraftAdministrativeUser EntityType into $metadata (fallback)');
+                LOG.debug('Injected DraftAdministrativeUser EntityType into $metadata (fallback)');
             }
             // ── 4. Inject NavigationPropertyBinding for DraftAdministrativeData/DraftAdministrativeUser ──
             if (!body.includes('Path="DraftAdministrativeData/DraftAdministrativeUser"')) {
@@ -199,7 +199,7 @@ cds.on('bootstrap', (app) => {
                     return open + inner.trimEnd() + binding + '\n        ' + close;
                 });
                 changed = true;
-                LOG.debug('[collab-draft] Injected DraftAdministrativeUser NavigationPropertyBinding into $metadata EntitySets');
+                LOG.debug('Injected DraftAdministrativeUser NavigationPropertyBinding into $metadata EntitySets');
             }
             // ── 5. Inject ColDraftShareUser ComplexType ──
             if (!body.includes('ComplexType Name="ColDraftShareUser"')) {
@@ -212,7 +212,7 @@ cds.on('bootstrap', (app) => {
                 body = body.replace('</Schema>', complexType + '\n</Schema>');
                 body = body.replace(/(<Action Name="\w+_ColDraftShare"[^>]*>[\s\S]*?<Parameter Name="Users") Type="Edm\.String"(\/?>)/g, `$1 Type="Collection(${ns}.ColDraftShareUser)"$2`);
                 changed = true;
-                LOG.debug('[collab-draft] Injected ColDraftShareUser ComplexType + fixed Users param in $metadata');
+                LOG.debug('Injected ColDraftShareUser ComplexType + fixed Users param in $metadata');
             }
             // ── 6. Inject ValueListRelevantQualifiers on ColDraftShareUser/UserID ──
             if (!body.includes('ColDraftShareUser/UserID')) {
@@ -225,7 +225,7 @@ cds.on('bootstrap', (app) => {
                 ].join('');
                 body = body.replace('</Schema>', vlAnnotation + '\n</Schema>');
                 changed = true;
-                LOG.debug('[collab-draft] Injected ValueListRelevantQualifiers on ColDraftShareUser/UserID');
+                LOG.debug('Injected ValueListRelevantQualifiers on ColDraftShareUser/UserID');
             }
             // ── 7. Inject WebSocket annotations ──
             if (_wsAvailable && !body.includes('Common.WebSocketBaseURL')) {
@@ -250,7 +250,7 @@ cds.on('bootstrap', (app) => {
                     }
                 }
                 changed = true;
-                LOG.debug('[collab-draft] Injected WebSocket annotations into $metadata');
+                LOG.debug('Injected WebSocket annotations into $metadata');
             }
             // ── 8. Inject Common.SideEffects for collaborative draft events ──
             if (_wsAvailable && !body.includes('Common.SideEffects" Qualifier="CollaborativePresenceChanged"')) {
@@ -278,10 +278,10 @@ cds.on('bootstrap', (app) => {
                     return open + inner.trimEnd() + sideEffectsXml + '\n        ' + close;
                 });
                 changed = true;
-                LOG.debug('[collab-draft] Injected SideEffects annotations into $metadata');
+                LOG.debug('Injected SideEffects annotations into $metadata');
             }
             if (changed)
-                LOG.debug('[collab-draft] $metadata patched for collaborative draft');
+                LOG.debug('$metadata patched for collaborative draft');
             return originalSend(body);
         };
         next();
@@ -348,10 +348,10 @@ cds.on('bootstrap', (app) => {
             if (accessType !== 'S')
                 return next();
             await db.run(`UPDATE DRAFT_DraftAdministrativeData SET InProcessByUser = ? WHERE DraftUUID = ?`, [userID, draftUUID]);
-            LOG.debug(`[collab-draft] Pre-set InProcessByUser=${userID} for collaborative draft ${draftUUID}`);
+            LOG.debug(`Pre-set InProcessByUser=${userID} for collaborative draft ${draftUUID}`);
         }
         catch (err) {
-            LOG.debug('[collab-draft] Could not pre-set InProcessByUser in middleware:', err.message);
+            LOG.debug('Could not pre-set InProcessByUser in middleware:', err.message);
         }
         next();
     });
@@ -383,7 +383,7 @@ cds.on('served', async (services) => {
         const collaborativeEntities = (0, draft_handlers_1.getCollaborativeEntities)(srv);
         if (collaborativeEntities.size === 0)
             continue;
-        LOG.info(`[collab-draft] Registering collaborative draft handlers for service ${srv.name} ` +
+        LOG.debug(`Registering collaborative draft handlers for service ${srv.name} ` +
             `(entities: ${[...collaborativeEntities].join(', ')})`);
         srv.prepend(() => {
             (0, draft_handlers_1.registerHandlers)(srv, collaborativeEntities);
@@ -409,15 +409,15 @@ cds.on('served', async (services) => {
                                 name: uname || mockedUsers[uid]?.displayName || (uid.charAt(0).toUpperCase() + uid.slice(1))
                             };
                             ws._collabDraft = qo.draft || null;
-                            LOG.info(`[collab-draft] WS connected: tagged socket with user ${uid} (draft=${qo.draft})`);
+                            LOG.debug(`WS connected: tagged socket with user ${uid} (draft=${qo.draft})`);
                         }
                         else {
                             ws._collabDraft = qo.draft || null;
-                            LOG.info(`[collab-draft] WS connected: no userID in queryOptions (keys: ${Object.keys(qo).join(',')})`);
+                            LOG.debug(`WS connected: no userID in queryOptions (keys: ${Object.keys(qo).join(',')})`);
                         }
                     }
                     catch (e) {
-                        LOG.debug('[collab-draft] wsConnect tagging error:', e.message);
+                        LOG.debug('wsConnect tagging error:', e.message);
                     }
                 });
                 wsService.on('MESSAGE', async (msg) => {
@@ -461,7 +461,7 @@ cds.on('served', async (services) => {
                             }
                         }
                         catch (e) {
-                            LOG.info('[collab-draft] MESSAGE user resolve error:', e.message);
+                            LOG.debug('MESSAGE user resolve error:', e.message);
                         }
                     }
                     if (!draftUUID) {
@@ -477,7 +477,7 @@ cds.on('served', async (services) => {
                         userID: userId,
                         userDescription: userName || userId
                     };
-                    LOG.info(`[collab-draft] Relaying MESSAGE: ${d.clientAction} by ${userId} (${userName})`);
+                    LOG.debug(`Relaying MESSAGE: ${d.clientAction} by ${userId} (${userName})`);
                     try {
                         const wsFacade = cds.context?.ws?.service;
                         if (wsFacade?.broadcast) {
@@ -505,7 +505,7 @@ cds.on('served', async (services) => {
                                     }
                                 }
                                 catch (e) {
-                                    LOG.debug('[collab-draft] JOINECHO error:', e.message);
+                                    LOG.debug('JOINECHO error:', e.message);
                                 }
                             }
                         }
@@ -514,14 +514,14 @@ cds.on('served', async (services) => {
                         }
                     }
                     catch (err) {
-                        LOG.debug('[collab-draft] MESSAGE relay failed:', err.message);
+                        LOG.debug('MESSAGE relay failed:', err.message);
                     }
                 });
-                LOG.info('[collab-draft] Registered MESSAGE relay handler for collaborative draft WS');
+                LOG.debug('Registered MESSAGE relay handler for collaborative draft WS');
             }
         }
         catch (err) {
-            LOG.debug('[collab-draft] Could not register MESSAGE relay:', err.message);
+            LOG.debug('Could not register MESSAGE relay:', err.message);
         }
     }
     const draftAdminTables = new Set(['DRAFT_DraftAdministrativeData']);
@@ -541,11 +541,11 @@ cds.on('served', async (services) => {
             ]) {
                 try {
                     await db.run(sql);
-                    LOG.debug(`[collab-draft] DDL migration: ${sql}`);
+                    LOG.debug(`DDL migration: ${sql}`);
                 }
                 catch (err) {
                     if (!err.message?.includes('duplicate column') && !err.message?.includes('already exists')) {
-                        LOG.debug(`[collab-draft] DDL migration skipped (${err.message?.slice(0, 60)})`);
+                        LOG.debug(`DDL migration skipped (${err.message?.slice(0, 60)})`);
                     }
                 }
             }
@@ -562,15 +562,15 @@ cds.on('served', async (services) => {
                     const updatedViewSql = viewSql.replace(/\bFROM\b/i, `,\n  DraftAdministrativeData.CollaborativeDraftEnabled,\n  DraftAdministrativeData.DraftAccessType\nFROM`);
                     await db.run(`DROP VIEW IF EXISTS ${viewName}`);
                     await db.run(updatedViewSql);
-                    LOG.debug(`[collab-draft] Recreated view ${viewName} with CollaborativeDraftEnabled/DraftAccessType`);
+                    LOG.debug(`Recreated view ${viewName} with CollaborativeDraftEnabled/DraftAccessType`);
                 }
                 catch (err) {
-                    LOG.debug(`[collab-draft] Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`);
+                    LOG.debug(`Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`);
                 }
             }
         }
         catch (err) {
-            LOG.warn('[collab-draft] Could not run DDL migration for collaborative draft columns:', err.message);
+            LOG.warn('Could not run DDL migration for collaborative draft columns:', err.message);
         }
     });
     setImmediate(async () => {
