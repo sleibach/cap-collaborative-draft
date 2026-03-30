@@ -2,8 +2,6 @@ namespace my.orders;
 
 using { managed, cuid } from '@sap/cds/common';
 
-@CollaborativeDraft.enabled: true
-@odata.draft.enabled
 entity Orders : managed {
   key ID        : UUID;
   OrderNo       : String(20) @mandatory;

@@ -214,18 +214,45 @@ cds.on('bootstrap', (app) => {
                 changed = true;
                 LOG.debug('Injected ColDraftShareUser ComplexType + fixed Users param in $metadata');
             }
-            // ── 6. Inject ValueListRelevantQualifiers on ColDraftShareUser/UserID ──
+            // ── 6. Inject ColDraftUsers EntityType + EntitySet + ValueList on ColDraftShareUser/UserID ──
+            if (!body.includes('EntityType Name="ColDraftUsers"')) {
+                const entityType = [
+                    `\n    <EntityType Name="ColDraftUsers">`,
+                    `\n        <Key><PropertyRef Name="UserID"/></Key>`,
+                    `\n        <Property Name="UserID" Type="Edm.String" Nullable="false" MaxLength="256"/>`,
+                    `\n        <Property Name="UserDescription" Type="Edm.String" MaxLength="256"/>`,
+                    `\n    </EntityType>`
+                ].join('');
+                body = body.replace('</Schema>', entityType + '\n</Schema>');
+                // Add EntitySet inside EntityContainer
+                body = body.replace(/(<EntityContainer[^>]*>)/, `$1\n        <EntitySet Name="ColDraftUsers" EntityType="${ns}.ColDraftUsers"/>`);
+                changed = true;
+                LOG.debug('Injected ColDraftUsers EntityType + EntitySet into $metadata');
+            }
             if (!body.includes('ColDraftShareUser/UserID')) {
                 const vlAnnotation = [
                     `\n    <Annotations Target="${ns}.ColDraftShareUser/UserID">`,
-                    `\n        <Annotation Term="Common.ValueListRelevantQualifiers">`,
-                    `\n            <Collection/>`,
+                    `\n        <Annotation Term="Common.ValueList">`,
+                    `\n            <Record Type="Common.ValueListType">`,
+                    `\n                <PropertyValue Property="CollectionPath" String="ColDraftUsers"/>`,
+                    `\n                <PropertyValue Property="Parameters">`,
+                    `\n                    <Collection>`,
+                    `\n                        <Record Type="Common.ValueListParameterOut">`,
+                    `\n                            <PropertyValue Property="LocalDataProperty" PropertyPath="UserID"/>`,
+                    `\n                            <PropertyValue Property="ValueListProperty" String="UserID"/>`,
+                    `\n                        </Record>`,
+                    `\n                        <Record Type="Common.ValueListParameterDisplayOnly">`,
+                    `\n                            <PropertyValue Property="ValueListProperty" String="UserDescription"/>`,
+                    `\n                        </Record>`,
+                    `\n                    </Collection>`,
+                    `\n                </PropertyValue>`,
+                    `\n            </Record>`,
                     `\n        </Annotation>`,
                     `\n    </Annotations>`
                 ].join('');
                 body = body.replace('</Schema>', vlAnnotation + '\n</Schema>');
                 changed = true;
-                LOG.debug('Injected ValueListRelevantQualifiers on ColDraftShareUser/UserID');
+                LOG.debug('Injected @Common.ValueList on ColDraftShareUser/UserID pointing to ColDraftUsers');
             }
             // ── 7. Inject WebSocket annotations ──
             if (_wsAvailable && !body.includes('Common.WebSocketBaseURL')) {
@@ -383,8 +410,7 @@ cds.on('served', async (services) => {
         const collaborativeEntities = (0, draft_handlers_1.getCollaborativeEntities)(srv);
         if (collaborativeEntities.size === 0)
             continue;
-        LOG.debug(`Registering collaborative draft handlers for service ${srv.name} ` +
-            `(entities: ${[...collaborativeEntities].join(', ')})`);
+        LOG.info(`Collaborative draft enabled for ${srv.name} [ ${[...collaborativeEntities].join(', ')} ]`);
         srv.prepend(() => {
             (0, draft_handlers_1.registerHandlers)(srv, collaborativeEntities);
         });
@@ -541,7 +567,6 @@ cds.on('served', async (services) => {
             ]) {
                 try {
                     await db.run(sql);
-                    LOG.debug(`DDL migration: ${sql}`);
                 }
                 catch (err) {
                     if (!err.message?.includes('duplicate column') && !err.message?.includes('already exists')) {
@@ -562,7 +587,6 @@ cds.on('served', async (services) => {
                     const updatedViewSql = viewSql.replace(/\bFROM\b/i, `,\n  DraftAdministrativeData.CollaborativeDraftEnabled,\n  DraftAdministrativeData.DraftAccessType\nFROM`);
                     await db.run(`DROP VIEW IF EXISTS ${viewName}`);
                     await db.run(updatedViewSql);
-                    LOG.debug(`Recreated view ${viewName} with CollaborativeDraftEnabled/DraftAccessType`);
                 }
                 catch (err) {
                     LOG.debug(`Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`);

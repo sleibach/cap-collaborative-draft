@@ -494,10 +494,12 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
 
       const draftUUID: string = row.DraftUUID
 
-      if (!row.CollaborativeDraftEnabled) {
-        const isCollab = row.DraftAccessType === 'S' || presence.getParticipants(draftUUID).length > 0
-        row.CollaborativeDraftEnabled = isCollab
-      }
+      // Always coerce to boolean (SQLite stores booleans as 0/1 integers)
+      row.CollaborativeDraftEnabled =
+        row.CollaborativeDraftEnabled === true ||
+        row.CollaborativeDraftEnabled === 1 ||
+        row.DraftAccessType === 'S' ||
+        presence.getParticipants(draftUUID).length > 0
 
       if (row.InProcessByUser === null || row.InProcessByUser === undefined) row.InProcessByUser = ''
       if (row.CreatedByUser === null || row.CreatedByUser === undefined) row.CreatedByUser = ''
@@ -604,6 +606,106 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
     }
 
     return []
+  })
+
+  //
+  // ── READ on ColDraftUsers — serve available users for invite value help ────────
+  //
+  srv.on('READ', 'ColDraftUsers', async function onReadColDraftUsers(req: any) {
+    const collabUsersConfig: any = (cds.env as any).collab?.users
+
+    // ── Entity-backed mode (enterprise: real DB table / projection) ──────────────
+    // Activated when cds.env.collab.users is an object with an `entity` key.
+    //
+    // Example .cdsrc.json:
+    //   "collab": {
+    //     "users": {
+    //       "entity": "OrderService.Users",
+    //       "userIdField": "email",          // optional, default "UserID"
+    //       "userDescriptionField": "name"   // optional, default "UserDescription"
+    //     }
+    //   }
+    if (collabUsersConfig?.entity) {
+      const entityName: string = collabUsersConfig.entity
+      const idField: string = collabUsersConfig.userIdField ?? 'UserID'
+      const descField: string = collabUsersConfig.userDescriptionField ?? 'UserDescription'
+
+      // Extract search term — FE sends either $search or $filter contains(...)
+      let searchTerm: string | undefined
+      const search = req.query?.SELECT?.search
+      const where = req.query?.SELECT?.where
+      if (Array.isArray(search)) {
+        searchTerm = search.find((s: any) => s?.val)?.val?.toString()
+      } else if (Array.isArray(where)) {
+        searchTerm = where.find((w: any) => w?.val)?.val?.toString()
+      }
+
+      // Build SELECT with field aliases so result always has UserID / UserDescription
+      const q: any = SELECT.from(entityName).columns(
+        `${idField} as UserID`,
+        `${descField} as UserDescription`
+      )
+
+      // Push search down to DB — much more efficient than in-memory for large directories
+      if (searchTerm) {
+        q.where(`${idField} like`, `%${searchTerm}%`)
+          .or(`${descField} like`, `%${searchTerm}%`)
+      }
+
+      // Pass through $top / $skip for pagination
+      const limit = req.query?.SELECT?.limit
+      if (limit) {
+        const top = limit.rows?.val ?? limit.rows ?? limit
+        const skip = limit.offset?.val ?? limit.offset
+        if (typeof top === 'number') q.limit(top, typeof skip === 'number' ? skip : undefined)
+      }
+
+      LOG.debug(`ColDraftUsers: delegating to entity "${entityName}" (idField: ${idField}, descField: ${descField})`)
+      return cds.run(q)
+    }
+
+    // ── Static map mode (development / small envs) ────────────────────────────────
+    // Source 1: plugin-level static user map (cds.env.collab.users as plain object)
+    // Source 2: CAP mock auth users (cds.env.requires.auth.users)
+    const authUsers: Record<string, any> | undefined =
+      (cds.env as any).requires?.auth?.users ?? (cds.env as any).requires?.['mock-users']?.users
+
+    const rawUsers: Record<string, any> =
+      (typeof collabUsersConfig === 'object' && !collabUsersConfig.entity ? collabUsersConfig : null) ??
+      authUsers ??
+      {}
+
+    const users = Object.entries(rawUsers).map(([id, info]: [string, any]) => ({
+      UserID: id,
+      UserDescription: info.displayName ?? info.name ?? info.fullName ?? id
+    }))
+
+    // Apply $filter / $search in memory
+    const search = req.query?.SELECT?.search
+    const where = req.query?.SELECT?.where
+    let filtered = users
+
+    if (Array.isArray(where)) {
+      const filterVal = where.find((w: any) => w?.val)?.val?.toString().toLowerCase()
+      if (filterVal) {
+        filtered = filtered.filter(u =>
+          u.UserID.toLowerCase().includes(filterVal) ||
+          u.UserDescription.toLowerCase().includes(filterVal)
+        )
+      }
+    }
+
+    if (Array.isArray(search)) {
+      const searchVal = search.find((s: any) => s?.val)?.val?.toString().toLowerCase()
+      if (searchVal) {
+        filtered = filtered.filter(u =>
+          u.UserID.toLowerCase().includes(searchVal) ||
+          u.UserDescription.toLowerCase().includes(searchVal)
+        )
+      }
+    }
+
+    return filtered
   })
 
   //
@@ -717,10 +819,9 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       }
     })
 
-    LOG.debug(`Registered ${actionName} handler for ${entityName}`)
   }
 
-  LOG.debug(`Collaborative draft handlers registered for service ${srv.name}`)
+  LOG.debug(`Handlers registered for service ${srv.name}`)
 }
 
 /**

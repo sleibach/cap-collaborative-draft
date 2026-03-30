@@ -22,7 +22,6 @@ function findCollaborativeDraftEntities(csn) {
             // Only root draft-enabled entities
             if (def['@odata.draft.enabled']) {
                 result.push(name);
-                LOG.debug(`Found collaborative draft entity: ${name}`);
             }
             else {
                 LOG.warn(`Entity ${name} has @CollaborativeDraft.enabled but NOT @odata.draft.enabled — collaborative draft ignored`);
@@ -39,7 +38,6 @@ function augmentModel(csn) {
     const entities = findCollaborativeDraftEntities(csn);
     if (entities.length === 0)
         return;
-    LOG.debug(`Augmenting model for ${entities.length} collaborative draft entity(ies)`);
     const defs = csn.definitions;
     // 1. Create DRAFT.DraftParticipants entity if it doesn't exist
     if (!defs['DRAFT.DraftParticipants']) {
@@ -71,7 +69,6 @@ function augmentModel(csn) {
                 }
             }
         };
-        LOG.debug('Created DRAFT.DraftParticipants entity');
     }
     // 2. Create DRAFT.DraftFieldLocks entity if it doesn't exist
     if (!defs['DRAFT.DraftFieldLocks']) {
@@ -108,7 +105,6 @@ function augmentModel(csn) {
                 }
             }
         };
-        LOG.debug('Created DRAFT.DraftFieldLocks entity');
     }
     // 3. NOTE: We do NOT pre-define DRAFT.DraftAdministrativeData in raw CSN.
     //    CollaborativeDraftEnabled and DraftAccessType are added to the DB table via
@@ -120,9 +116,9 @@ function augmentModel(csn) {
             continue;
         if (!entity['@Common.DraftRoot.ShareAction']) {
             entity['@Common.DraftRoot.ShareAction'] = `${entityName.split('.').pop()}_ColDraftShare`;
-            LOG.debug(`Added @Common.DraftRoot.ShareAction to ${entityName}`);
         }
     }
+    LOG.debug(`Raw CSN augmented for ${entities.length} collaborative draft entity(ies): ${entities.join(', ')}`);
 }
 /**
  * Augments the compiled model (after cds.compile.for.nodejs) to extend
@@ -157,7 +153,6 @@ function augmentCompiledModel(model) {
             type: 'cds.Boolean',
             virtual: false
         };
-        LOG.debug('Added CollaborativeDraftEnabled element to DRAFT.DraftAdministrativeData compiled model');
     }
     if (!draftAdmin.elements.DraftAccessType) {
         draftAdmin.elements.DraftAccessType = {
@@ -166,7 +161,6 @@ function augmentCompiledModel(model) {
             length: 1,
             virtual: false
         };
-        LOG.debug('Added DraftAccessType element to DRAFT.DraftAdministrativeData compiled model');
     }
     // 1. Add DraftAdministrativeUser entity to the compiled model for OData navigation.
     if (!model.definitions['DRAFT.DraftAdministrativeUser']) {
@@ -181,7 +175,6 @@ function augmentCompiledModel(model) {
                 UserEditingState: { type: 'cds.String', length: 32, name: 'UserEditingState' }
             }
         });
-        LOG.debug('Added DRAFT.DraftAdministrativeUser to compiled model');
     }
     // 2. Add DraftAdministrativeUser navigation property to DraftAdministrativeData.
     const draftAdminUserEntity = model.definitions['DRAFT.DraftAdministrativeUser'];
@@ -200,12 +193,32 @@ function augmentCompiledModel(model) {
             _foreignKeys: [],
             on: []
         };
-        LOG.debug('Added DraftAdministrativeUser nav prop to DRAFT.DraftAdministrativeData');
     }
-    // 3. Also add to service-projected DraftAdministrativeData entities
+    // 3. Add ColDraftUsers entity to each service that has collaborative draft
+    for (const [name, def] of Object.entries(model.definitions)) {
+        if (def.kind !== 'entity' || !def['@Common.DraftRoot.ShareAction'])
+            continue;
+        const parts = name.split('.');
+        if (parts.length < 2)
+            continue;
+        const serviceNs = parts.slice(0, -1).join('.');
+        const colDraftUsersName = `${serviceNs}.ColDraftUsers`;
+        if (!model.definitions[colDraftUsersName]) {
+            model.definitions[colDraftUsersName] = _makeLinkedEntity({
+                kind: 'entity',
+                name: colDraftUsersName,
+                '@cds.persistence.skip': true,
+                _service: def._service,
+                elements: {
+                    UserID: { key: true, type: 'cds.String', length: 256, name: 'UserID' },
+                    UserDescription: { type: 'cds.String', length: 256, name: 'UserDescription' }
+                }
+            });
+        }
+    }
+    // 4. Also add to service-projected DraftAdministrativeData entities
     for (const [name, def] of Object.entries(model.definitions)) {
         if (name.endsWith('.DraftAdministrativeData') && !name.startsWith('DRAFT.') && def.elements) {
-            // Also expose CollaborativeDraftEnabled and DraftAccessType on service projections
             if (!def.elements.CollaborativeDraftEnabled) {
                 def.elements.CollaborativeDraftEnabled = {
                     name: 'CollaborativeDraftEnabled',
@@ -252,7 +265,6 @@ function augmentCompiledModel(model) {
                     _foreignKeys: [],
                     on: []
                 };
-                LOG.debug(`Added DraftAdministrativeUser nav prop to ${name}`);
             }
         }
     }
@@ -281,7 +293,6 @@ function augmentCompiledModel(model) {
                 name: actionShortName,
                 params
             };
-            LOG.debug(`Added bound ColDraftShare action ${actionShortName} to entity ${name}`);
             const shareUserTypeName = `${serviceNs}.ColDraftShareUser`;
             if (!model.definitions[shareUserTypeName]) {
                 model.definitions[shareUserTypeName] = _makeLinkedEntity({
@@ -292,8 +303,8 @@ function augmentCompiledModel(model) {
                         UserAccessRole: { type: 'cds.String', length: 1, name: 'UserAccessRole' }
                     }
                 });
-                LOG.debug(`Added ${shareUserTypeName} complex type`);
             }
         }
     }
+    LOG.debug(`Compiled model augmented for collaborative draft`);
 }

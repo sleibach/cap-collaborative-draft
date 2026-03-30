@@ -170,7 +170,8 @@ async function loadFromDB() {
                 isOriginator: row.IsOriginator === true || row.IsOriginator === 1
             });
         }
-        LOG.debug(`Loaded ${rows.length} participants from DB`);
+        if (rows.length > 0)
+            LOG.debug(`Loaded ${rows.length} participants from DB`);
     }
     catch (err) {
         LOG.warn('Failed to load participants from DB (table may not exist yet):', err.message);
