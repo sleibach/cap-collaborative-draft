@@ -42,6 +42,13 @@
       "phone": true
     }
   },
+  "sap.fe": {
+    "app": {
+      "sideEffectsEventsInteractionType": {
+        "default": "None"
+      }
+    }
+  },
   "sap.ui5": {
     "flexEnabled": true,
     "dependencies": {
