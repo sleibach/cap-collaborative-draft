@@ -193,14 +193,18 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       const draftsTarget = target.drafts
       if (!draftsTarget) return next()
 
-      const where = req.query?.SELECT?.from?.ref?.[0]?.where ?? req.params?.[0]
-      if (!where) return next()
+      // Use only the entity ID — never include IsActiveEntity in the draft lookup.
+      // req.params[0] carries the ACTIVE entity key ({ID, IsActiveEntity:true}), so passing
+      // it directly would contradict the drafts view's implicit IsActiveEntity=false filter
+      // and always return no rows.
+      const entityID: string | undefined = req.params?.[0]?.ID
+      if (!entityID) return next()
 
       const draftRow = await cds.run(
         SELECT.one
           .from(draftsTarget)
           .columns(['DraftAdministrativeData_DraftUUID', 'IsActiveEntity'])
-          .where(Array.isArray(where) ? where : [where])
+          .where({ ID: entityID })
       )
 
       if (!draftRow) {
@@ -227,7 +231,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       })
 
       const draftData: any = await cds.run(
-        SELECT.one.from(draftsTarget).where(Array.isArray(where) ? where : [where])
+        SELECT.one.from(draftsTarget).where({ ID: entityID })
       )
 
       if (!draftData) return next()
@@ -348,7 +352,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
   //
   // ── after UPDATE (PATCH) — emit CollaborativeDraftChanged ──────────────────────
   //
-  srv.after('UPDATE', '*', async function afterCollaborativePatch(result: any, req: any) {
+  srv.after('UPDATE', '*', async function afterCollaborativePatch(_result: any, req: any) {
     if (!isCollaborativeTarget(req, collaborativeEntities)) return
     const keyObj = req.params?.[0]
     if (!keyObj || typeof keyObj !== 'object') return
@@ -393,6 +397,10 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
 
       LOG.debug(`User ${req.user.id} activating collaborative draft ${draftUUID}`)
 
+      // Persist on req so the after-handler can clean up without a second DB round-trip
+      req._collabDraftUUID = draftUUID
+      req._collabEntityID = req.params?.[0]?.ID ?? null
+
       await cds.run(
         UPDATE('DRAFT.DraftAdministrativeData')
           .data({ InProcessByUser: req.user.id })
@@ -429,21 +437,11 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
     if (!isCollaborativeTarget(req, collaborativeEntities)) return next()
 
     try {
-      const target = req.target?.isDraft ? req.target : req.target?.drafts
-      if (!target) return next()
-
-      const where = req.query?.DELETE?.from?.ref?.[0]?.where ?? req.params?.[0]
-      if (!where) return next()
-
-      const row: any = await cds.run(
-        SELECT.one.from(target).columns(['DraftAdministrativeData_DraftUUID']).where(
-          Array.isArray(where) ? where : [where]
-        )
-      )
-
-      if (!row?.DraftAdministrativeData_DraftUUID) return next()
-
-      const draftUUID: string = row.DraftAdministrativeData_DraftUUID
+      // Use _lookupDraftUUID for consistent resolution regardless of whether req.target
+      // is the root entity or the drafts view (lean_draft sets it to the drafts view for
+      // IsActiveEntity=false requests, making req.target?.drafts undefined).
+      const draftUUID = await _lookupDraftUUID(req, srv, collaborativeEntities)
+      if (!draftUUID) return next()
 
       let isOrig = false
       try {
@@ -485,7 +483,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
   //
   // ── after READ on DraftAdministrativeData — inject collaborative draft fields ──
   //
-  srv.after('READ', 'DraftAdministrativeData', async function afterReadDraftAdmin(result: any, req: any) {
+  srv.after('READ', 'DraftAdministrativeData', async function afterReadDraftAdmin(result: any, _req: any) {
     if (!result) return
 
     const results: any[] = Array.isArray(result) ? result : [result]
@@ -508,6 +506,16 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
   })
 
   //
+  //
+  // ── READ on DraftMessages — required by FE when @Common.DraftRoot.ShareAction is set ──
+  // FE navigates to <entity>/DraftMessages to display per-field validation messages from
+  // collaborating users. We return an empty collection — CAP's own validation mechanism
+  // (@Core.Messages / req.error()) is the authoritative source for errors on PATCH/activate.
+  //
+  srv.on('READ', 'DraftMessages', async function onReadDraftMessages(_req: any) {
+    return []
+  })
+
   // ── READ on DraftAdministrativeUser — serve participants ─────────────────────
   //
   srv.on('READ', 'DraftAdministrativeUser', async function onReadDraftAdminUser(req: any) {

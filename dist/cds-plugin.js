@@ -254,7 +254,54 @@ cds.on('bootstrap', (app) => {
                 changed = true;
                 LOG.debug('Injected @Common.ValueList on ColDraftShareUser/UserID pointing to ColDraftUsers');
             }
-            // ── 7. Inject WebSocket annotations ──
+            // ── 7. Inject DraftMessages EntityType + NavigationProperty + NavigationPropertyBinding ──
+            // FE expects a navigable DraftMessages when @Common.DraftRoot.ShareAction is set.
+            // CAP already emits DraftMessages as a structural Property (Collection of ComplexType).
+            // A structural property CANNOT be addressed as a URL path segment; only NavigationProperty
+            // can. So we replace the structural Property with a ContainsTarget NavigationProperty.
+            //
+            // Each sub-step is guarded independently (idempotent) so it works whether or not CAP
+            // cached a partially-patched body from a previous request.
+            // a) Replace the structural Property with a NavigationProperty (unconditional — idempotent)
+            if (body.includes(`<Property Name="DraftMessages" Type="Collection(`)) {
+                body = body.replace(/<Property Name="DraftMessages" Type="Collection\([^)]+\)"[^/]*\/>/g, `<NavigationProperty Name="DraftMessages" Type="Collection(${ns}.DraftMessages)" ContainsTarget="true"/>`);
+                changed = true;
+            }
+            // b) Add our DraftMessages EntityType if not already present
+            if (!body.includes('EntityType Name="DraftMessages"')) {
+                const draftMsgType = [
+                    `\n    <EntityType Name="DraftMessages">`,
+                    `\n        <Key><PropertyRef Name="DraftUUID"/><PropertyRef Name="FieldName"/></Key>`,
+                    `\n        <Property Name="DraftUUID" Type="Edm.Guid" Nullable="false"/>`,
+                    `\n        <Property Name="FieldName" Type="Edm.String" MaxLength="30" Nullable="false"/>`,
+                    `\n        <Property Name="IsActiveEntity" Type="Edm.Boolean"/>`,
+                    `\n        <Property Name="Message" Type="Edm.String"/>`,
+                    `\n        <Property Name="NumericSeverity" Type="Edm.Byte"/>`,
+                    `\n        <Property Name="Target" Type="Edm.String" MaxLength="500"/>`,
+                    `\n        <Property Name="Transition" Type="Edm.Boolean"/>`,
+                    `\n    </EntityType>`
+                ].join('');
+                body = body.replace('</Schema>', draftMsgType + '\n</Schema>');
+                changed = true;
+            }
+            // c) Add standalone EntitySet
+            if (!body.includes(`EntitySet Name="DraftMessages"`)) {
+                body = body.replace(/(<EntityContainer[^>]*>)/, `$1\n        <EntitySet Name="DraftMessages" EntityType="${ns}.DraftMessages"/>`);
+                changed = true;
+            }
+            // d) Add NavigationPropertyBinding on every collaborative entity's EntitySet (idempotent)
+            body = body.replace(/(<EntitySet Name="([^"]+)"[^>]*>)([\s\S]*?)(<\/EntitySet>)/g, (match, open, setName, inner, close) => {
+                if (!body.includes(`${setName}_ColDraftShare`))
+                    return match;
+                if (inner.includes('Path="DraftMessages"'))
+                    return match;
+                const binding = '\n          <NavigationPropertyBinding Path="DraftMessages" Target="DraftMessages"/>';
+                changed = true;
+                return open + inner.trimEnd() + binding + '\n        ' + close;
+            });
+            if (changed)
+                LOG.debug('Injected DraftMessages NavigationProperty into $metadata');
+            // ── 8. Inject WebSocket annotations ──
             if (_wsAvailable && !body.includes('Common.WebSocketBaseURL')) {
                 body = body.replace(/(<Annotations Target="[^"]*EntityContainer"[^>]*>)/, (match) => {
                     const wsAnnotations = [

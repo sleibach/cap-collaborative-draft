@@ -204,12 +204,14 @@ export function augmentCompiledModel(model: any): void {
     }
   }
 
-  // 3. Add ColDraftUsers entity to each service that has collaborative draft
+  // 3. Add ColDraftUsers + DraftMessages entities to each service that has collaborative draft
   for (const [name, def] of Object.entries<any>(model.definitions)) {
     if (def.kind !== 'entity' || !def['@Common.DraftRoot.ShareAction']) continue
     const parts = name.split('.')
     if (parts.length < 2) continue
     const serviceNs = parts.slice(0, -1).join('.')
+
+    // ColDraftUsers — user directory for invite dialog value help
     const colDraftUsersName = `${serviceNs}.ColDraftUsers`
     if (!model.definitions[colDraftUsersName]) {
       model.definitions[colDraftUsersName] = _makeLinkedEntity({
@@ -222,6 +224,48 @@ export function augmentCompiledModel(model: any): void {
           UserDescription: { type: 'cds.String', length: 256, name: 'UserDescription' }
         }
       })
+    }
+
+    // DraftMessages — virtual entity expected by FE when @Common.DraftRoot.ShareAction is set.
+    // FE navigates to <entity>/DraftMessages to display per-field validation messages.
+    // We expose it as a virtual contained navigation returning an empty collection (no messages).
+    const draftMessagesName = `${serviceNs}.DraftMessages`
+    if (!model.definitions[draftMessagesName]) {
+      model.definitions[draftMessagesName] = _makeLinkedEntity({
+        kind: 'entity',
+        name: draftMessagesName,
+        '@cds.persistence.skip': true,
+        _service: def._service,
+        elements: {
+          DraftUUID:        { key: true, type: 'cds.UUID',    name: 'DraftUUID' },
+          FieldName:        { key: true, type: 'cds.String',  length: 30,  name: 'FieldName' },
+          IsActiveEntity:   { type: 'cds.Boolean', name: 'IsActiveEntity' },
+          Message:          { type: 'cds.LargeString',        name: 'Message' },
+          NumericSeverity:  { type: 'cds.Integer',            name: 'NumericSeverity' },
+          Target:           { type: 'cds.String', length: 500, name: 'Target' },
+          Transition:       { type: 'cds.Boolean', name: 'Transition' }
+        }
+      })
+    }
+
+    // Add DraftMessages as a virtual contained navigation on the collaborative entity
+    if (!def.elements) def.elements = {}
+    if (!def.elements.DraftMessages) {
+      const draftMsgEntity = model.definitions[draftMessagesName]
+      def.elements.DraftMessages = {
+        name: 'DraftMessages',
+        type: 'cds.Composition',
+        cardinality: { max: '*' },
+        target: draftMessagesName,
+        _target: draftMsgEntity,
+        isComposition: true,
+        isAssociation: true,
+        is2many: true,
+        virtual: true,
+        '@odata.contained': true,
+        _foreignKeys: [],
+        on: []
+      }
     }
   }
 

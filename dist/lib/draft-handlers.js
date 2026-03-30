@@ -209,13 +209,17 @@ function registerHandlers(srv, collaborativeEntities) {
             const draftsTarget = target.drafts;
             if (!draftsTarget)
                 return next();
-            const where = req.query?.SELECT?.from?.ref?.[0]?.where ?? req.params?.[0];
-            if (!where)
+            // Use only the entity ID — never include IsActiveEntity in the draft lookup.
+            // req.params[0] carries the ACTIVE entity key ({ID, IsActiveEntity:true}), so passing
+            // it directly would contradict the drafts view's implicit IsActiveEntity=false filter
+            // and always return no rows.
+            const entityID = req.params?.[0]?.ID;
+            if (!entityID)
                 return next();
             const draftRow = await cds.run(SELECT.one
                 .from(draftsTarget)
                 .columns(['DraftAdministrativeData_DraftUUID', 'IsActiveEntity'])
-                .where(Array.isArray(where) ? where : [where]));
+                .where({ ID: entityID }));
             if (!draftRow) {
                 LOG.debug(`No existing draft found — creating new draft for ${req.user.id}`);
                 return next();
@@ -233,7 +237,7 @@ function registerHandlers(srv, collaborativeEntities) {
                 displayName: getUserDisplayName(req),
                 isOriginator: isOrig
             });
-            const draftData = await cds.run(SELECT.one.from(draftsTarget).where(Array.isArray(where) ? where : [where]));
+            const draftData = await cds.run(SELECT.one.from(draftsTarget).where({ ID: entityID }));
             if (!draftData)
                 return next();
             await cds.run(UPDATE('DRAFT.DraftAdministrativeData')
@@ -338,7 +342,7 @@ function registerHandlers(srv, collaborativeEntities) {
     //
     // ── after UPDATE (PATCH) — emit CollaborativeDraftChanged ──────────────────────
     //
-    srv.after('UPDATE', '*', async function afterCollaborativePatch(result, req) {
+    srv.after('UPDATE', '*', async function afterCollaborativePatch(_result, req) {
         if (!isCollaborativeTarget(req, collaborativeEntities))
             return;
         const keyObj = req.params?.[0];
@@ -381,6 +385,9 @@ function registerHandlers(srv, collaborativeEntities) {
             if (!draftUUID)
                 return;
             LOG.debug(`User ${req.user.id} activating collaborative draft ${draftUUID}`);
+            // Persist on req so the after-handler can clean up without a second DB round-trip
+            req._collabDraftUUID = draftUUID;
+            req._collabEntityID = req.params?.[0]?.ID ?? null;
             await cds.run(UPDATE('DRAFT.DraftAdministrativeData')
                 .data({ InProcessByUser: req.user.id })
                 .where({ DraftUUID: draftUUID }));
@@ -412,16 +419,12 @@ function registerHandlers(srv, collaborativeEntities) {
         if (!isCollaborativeTarget(req, collaborativeEntities))
             return next();
         try {
-            const target = req.target?.isDraft ? req.target : req.target?.drafts;
-            if (!target)
+            // Use _lookupDraftUUID for consistent resolution regardless of whether req.target
+            // is the root entity or the drafts view (lean_draft sets it to the drafts view for
+            // IsActiveEntity=false requests, making req.target?.drafts undefined).
+            const draftUUID = await _lookupDraftUUID(req, srv, collaborativeEntities);
+            if (!draftUUID)
                 return next();
-            const where = req.query?.DELETE?.from?.ref?.[0]?.where ?? req.params?.[0];
-            if (!where)
-                return next();
-            const row = await cds.run(SELECT.one.from(target).columns(['DraftAdministrativeData_DraftUUID']).where(Array.isArray(where) ? where : [where]));
-            if (!row?.DraftAdministrativeData_DraftUUID)
-                return next();
-            const draftUUID = row.DraftAdministrativeData_DraftUUID;
             let isOrig = false;
             try {
                 const adminRows = await cds.db.run(`SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
@@ -458,7 +461,7 @@ function registerHandlers(srv, collaborativeEntities) {
     //
     // ── after READ on DraftAdministrativeData — inject collaborative draft fields ──
     //
-    srv.after('READ', 'DraftAdministrativeData', async function afterReadDraftAdmin(result, req) {
+    srv.after('READ', 'DraftAdministrativeData', async function afterReadDraftAdmin(result, _req) {
         if (!result)
             return;
         const results = Array.isArray(result) ? result : [result];
@@ -481,6 +484,15 @@ function registerHandlers(srv, collaborativeEntities) {
         }
     });
     //
+    //
+    // ── READ on DraftMessages — required by FE when @Common.DraftRoot.ShareAction is set ──
+    // FE navigates to <entity>/DraftMessages to display per-field validation messages from
+    // collaborating users. We return an empty collection — CAP's own validation mechanism
+    // (@Core.Messages / req.error()) is the authoritative source for errors on PATCH/activate.
+    //
+    srv.on('READ', 'DraftMessages', async function onReadDraftMessages(_req) {
+        return [];
+    });
     // ── READ on DraftAdministrativeUser — serve participants ─────────────────────
     //
     srv.on('READ', 'DraftAdministrativeUser', async function onReadDraftAdminUser(req) {
