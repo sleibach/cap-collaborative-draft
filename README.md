@@ -12,6 +12,7 @@ Collaborative Draft lets multiple authenticated users co-edit the same draft ins
 ## Table of Contents
 
 - [Overview](#overview)
+- [Live Demo](#live-demo)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
@@ -54,8 +55,6 @@ SAP Fiori Elements Collaborative Draft is the standard mechanism for multi-user 
 This plugin replicates the full OData contract on CAP Node.js, allowing Fiori Elements clients to activate their collaborative draft UI against a CAP backend. The plugin is additive — existing entities without `@CollaborativeDraft.enabled` are completely unaffected.
 
 ### Live Demo
-
-https://github.com/user-attachments/assets/cap-collaborative-draft.mp4
 
 <video src="docs/cap-collaborative-draft.mp4" controls width="100%"></video>
 
