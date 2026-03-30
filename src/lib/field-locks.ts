@@ -1,31 +1,46 @@
 'use strict'
 
-const cds = require('@sap/cds')
+import cds = require('@sap/cds')
+
 const LOG = cds.log('collab-draft')
 
 // Default lock TTL (120 seconds)
 const DEFAULT_LOCK_TTL_MS = 120 * 1000
 
+export interface LockConflict {
+  fieldName: string
+  lockedBy: string
+}
+
+export interface AcquireResult {
+  acquired: boolean
+  lockedBy?: string
+}
+
+export interface AcquireLocksResult {
+  acquired: boolean
+  conflicts: LockConflict[]
+}
+
 /**
  * Get lock TTL from config or use default
  */
-function getLockTtlMs() {
-  return cds.env.collab?.fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS
+export function getLockTtlMs(): number {
+  return (cds.env as any).collab?.fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS
 }
 
 /**
  * Attempts to acquire a lock on a field for a user.
  * Fails if another user holds a non-expired lock.
- *
- * @param {object} opts
- * @param {string} opts.draftUUID
- * @param {string} opts.entityName
- * @param {string} opts.entityKey - serialized entity key (e.g. "ID=<uuid>")
- * @param {string} opts.fieldName
- * @param {string} opts.userID
- * @returns {Promise<{ acquired: boolean, lockedBy?: string }>}
  */
-async function acquireLock({ draftUUID, entityName, entityKey, fieldName, userID }) {
+export async function acquireLock(opts: {
+  draftUUID: string
+  entityName: string
+  entityKey: string
+  fieldName: string
+  userID: string
+}): Promise<AcquireResult> {
+  const { draftUUID, entityName, entityKey, fieldName, userID } = opts
   const ttlMs = getLockTtlMs()
   const cutoff = new Date(Date.now() - ttlMs)
 
@@ -74,7 +89,7 @@ async function acquireLock({ draftUUID, entityName, entityKey, fieldName, userID
     )
     LOG.debug(`Lock acquired: ${fieldName} → ${userID}`)
     return { acquired: true }
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to acquire field lock:', err.message)
     // On DB error, be permissive — don't block the user
     return { acquired: true }
@@ -83,23 +98,22 @@ async function acquireLock({ draftUUID, entityName, entityKey, fieldName, userID
 
 /**
  * Acquires locks for multiple fields atomically (checks all before acquiring any).
- *
- * @param {object} opts
- * @param {string} opts.draftUUID
- * @param {string} opts.entityName
- * @param {string} opts.entityKey
- * @param {string[]} opts.fieldNames
- * @param {string} opts.userID
- * @returns {Promise<{ acquired: boolean, conflicts: Array<{ fieldName, lockedBy }> }>}
  */
-async function acquireLocks({ draftUUID, entityName, entityKey, fieldNames, userID }) {
+export async function acquireLocks(opts: {
+  draftUUID: string
+  entityName: string
+  entityKey: string
+  fieldNames: string[]
+  userID: string
+}): Promise<AcquireLocksResult> {
+  const { draftUUID, entityName, entityKey, fieldNames, userID } = opts
   const ttlMs = getLockTtlMs()
   const cutoff = new Date(Date.now() - ttlMs)
-  const conflicts = []
+  const conflicts: LockConflict[] = []
 
   try {
     // Get all current locks for these fields in one query
-    const existing = await cds.run(
+    const existing: any[] = await cds.run(
       SELECT.from('DRAFT.DraftFieldLocks').where({
         DraftUUID: draftUUID,
         EntityName: entityName,
@@ -108,7 +122,7 @@ async function acquireLocks({ draftUUID, entityName, entityKey, fieldNames, user
       })
     )
 
-    const lockMap = new Map(existing.map(l => [l.FieldName, l]))
+    const lockMap = new Map<string, any>(existing.map((l: any) => [l.FieldName, l]))
 
     // Check for conflicts
     for (const fieldName of fieldNames) {
@@ -150,7 +164,7 @@ async function acquireLocks({ draftUUID, entityName, entityKey, fieldNames, user
     }
 
     return { acquired: true, conflicts: [] }
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to acquire field locks:', err.message)
     return { acquired: true, conflicts: [] }
   }
@@ -158,47 +172,42 @@ async function acquireLocks({ draftUUID, entityName, entityKey, fieldNames, user
 
 /**
  * Releases all locks held by a user for a draft.
- * @param {string} draftUUID
- * @param {string} userID
  */
-async function releaseLocks(draftUUID, userID) {
+export async function releaseLocks(draftUUID: string, userID: string): Promise<void> {
   try {
     await cds.run(
       DELETE.from('DRAFT.DraftFieldLocks').where({ DraftUUID: draftUUID, LockedBy: userID })
     )
     LOG.debug(`Released all locks for ${userID} on draft ${draftUUID}`)
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to release field locks:', err.message)
   }
 }
 
 /**
  * Releases ALL locks for a draft (called on activation or full cancel).
- * @param {string} draftUUID
  */
-async function releaseAllLocks(draftUUID) {
+export async function releaseAllLocks(draftUUID: string): Promise<void> {
   try {
     await cds.run(DELETE.from('DRAFT.DraftFieldLocks').where({ DraftUUID: draftUUID }))
     LOG.debug(`Released all locks for draft ${draftUUID}`)
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to release all field locks:', err.message)
   }
 }
 
 /**
  * Returns all current (non-expired) locks for a draft.
- * @param {string} draftUUID
- * @returns {Promise<Array>}
  */
-async function getActiveLocks(draftUUID) {
+export async function getActiveLocks(draftUUID: string): Promise<any[]> {
   const ttlMs = getLockTtlMs()
   const cutoff = new Date(Date.now() - ttlMs)
   try {
-    const locks = await cds.run(
+    const locks: any[] = await cds.run(
       SELECT.from('DRAFT.DraftFieldLocks').where({ DraftUUID: draftUUID })
     )
-    return locks.filter(l => new Date(l.LockedAt) >= cutoff)
-  } catch (err) {
+    return locks.filter((l: any) => new Date(l.LockedAt) >= cutoff)
+  } catch (err: any) {
     LOG.warn('Failed to get active locks:', err.message)
     return []
   }
@@ -207,20 +216,14 @@ async function getActiveLocks(draftUUID) {
 /**
  * Extracts field names from a PATCH request data object.
  * Ignores draft-internal fields.
- * @param {object} data - req.data
- * @returns {string[]}
  */
-function extractPatchedFields(data) {
+export function extractPatchedFields(data: Record<string, unknown> | null | undefined): string[] {
   // Exclude: draft system fields, primary keys, foreign keys, audit fields
-  // Primary keys (ID, etc.) come with every PATCH but shouldn't be locked
   const excludedFields = new Set([
     'IsActiveEntity', 'HasDraftEntity', 'HasActiveEntity',
     'DraftAdministrativeData_DraftUUID', 'DraftAdministrativeData',
-    // Primary keys — not actual field edits
     'ID',
-    // Audit fields managed by framework
-    'createdAt', 'createdBy', 'modifiedAt', 'modifiedBy',
-    // Common FK suffix pattern — exclude raw FK columns (e.g. Order_ID)
+    'createdAt', 'createdBy', 'modifiedAt', 'modifiedBy'
   ])
   return Object.keys(data || {}).filter(k => {
     if (excludedFields.has(k)) return false
@@ -232,27 +235,14 @@ function extractPatchedFields(data) {
 
 /**
  * Serializes entity keys to a stable string.
- * @param {object} req
- * @returns {string}
  */
-function serializeEntityKey(req) {
+export function serializeEntityKey(req: any): string {
   const keys = req.params?.[req.params.length - 1] || {}
   if (typeof keys === 'object') {
     return Object.entries(keys)
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => (a as string).localeCompare(b as string))
       .map(([k, v]) => `${k}=${v}`)
       .join(',')
   }
   return String(keys)
-}
-
-module.exports = {
-  acquireLock,
-  acquireLocks,
-  releaseLocks,
-  releaseAllLocks,
-  getActiveLocks,
-  extractPatchedFields,
-  serializeEntityKey,
-  getLockTtlMs
 }

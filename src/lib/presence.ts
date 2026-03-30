@@ -1,6 +1,7 @@
 'use strict'
 
-const cds = require('@sap/cds')
+import cds = require('@sap/cds')
+
 const LOG = cds.log('collab-draft')
 
 // Default TTL for participants (5 minutes of inactivity)
@@ -8,27 +9,40 @@ const DEFAULT_TTL_MS = 5 * 60 * 1000
 // Cleanup interval (30 seconds)
 const CLEANUP_INTERVAL_MS = 30 * 1000
 
+interface ParticipantEntry {
+  displayName: string
+  lastSeen: number
+  isOriginator: boolean
+}
+
+export interface ParticipantRecord {
+  userID: string
+  displayName: string
+  lastSeen: Date
+  isOriginator: boolean
+}
+
 /**
  * In-memory participant store:
- * Map<draftUUID, Map<userID, { displayName, lastSeen, isOriginator }>>
+ * Map<draftUUID, Map<userID, ParticipantEntry>>
  */
-const _store = new Map()
+export const _store = new Map<string, Map<string, ParticipantEntry>>()
 
 /** Cleanup interval timer reference */
-let _cleanupTimer = null
+let _cleanupTimer: ReturnType<typeof setInterval> | null = null
 
 /**
  * Get TTL from config or use default
  */
-function getTtlMs() {
-  return cds.env.collab?.presenceTtlMs ?? DEFAULT_TTL_MS
+function getTtlMs(): number {
+  return (cds.env as any).collab?.presenceTtlMs ?? DEFAULT_TTL_MS
 }
 
 /**
  * Starts the periodic cleanup of stale participants.
  * Safe to call multiple times — only one interval is created.
  */
-function startCleanup() {
+export function startCleanup(): void {
   if (_cleanupTimer) return
   _cleanupTimer = setInterval(() => {
     const ttl = getTtlMs()
@@ -39,7 +53,7 @@ function startCleanup() {
           LOG.debug(`Removing stale participant ${userID} from draft ${draftUUID}`)
           participants.delete(userID)
           // Also remove from DB (fire and forget)
-          _removeParticipantFromDB(draftUUID, userID).catch(err =>
+          _removeParticipantFromDB(draftUUID, userID).catch((err: Error) =>
             LOG.warn('Failed to remove stale participant from DB:', err.message)
           )
         }
@@ -51,13 +65,15 @@ function startCleanup() {
   }, CLEANUP_INTERVAL_MS)
 
   // Don't block process exit
-  if (_cleanupTimer.unref) _cleanupTimer.unref()
+  if (typeof (_cleanupTimer as any).unref === 'function') {
+    (_cleanupTimer as any).unref()
+  }
 }
 
 /**
  * Stops the cleanup interval (for testing)
  */
-function stopCleanup() {
+export function stopCleanup(): void {
   if (_cleanupTimer) {
     clearInterval(_cleanupTimer)
     _cleanupTimer = null
@@ -66,18 +82,17 @@ function stopCleanup() {
 
 /**
  * Adds or updates a participant in the in-memory store and DB.
- * @param {string} draftUUID
- * @param {string} userID
- * @param {object} opts
- * @param {string} [opts.displayName]
- * @param {boolean} [opts.isOriginator=false]
  */
-async function join(draftUUID, userID, opts = {}) {
+export async function join(
+  draftUUID: string,
+  userID: string,
+  opts: { displayName?: string; isOriginator?: boolean } = {}
+): Promise<void> {
   const { displayName = userID, isOriginator = false } = opts
 
   // In-memory
   if (!_store.has(draftUUID)) _store.set(draftUUID, new Map())
-  const participants = _store.get(draftUUID)
+  const participants = _store.get(draftUUID)!
   const existing = participants.get(userID)
   participants.set(userID, {
     displayName,
@@ -93,11 +108,8 @@ async function join(draftUUID, userID, opts = {}) {
 
 /**
  * Updates a participant's lastSeen timestamp (heartbeat).
- * @param {string} draftUUID
- * @param {string} userID
- * @param {string} [displayName]
  */
-async function heartbeat(draftUUID, userID, displayName) {
+export async function heartbeat(draftUUID: string, userID: string, displayName?: string): Promise<void> {
   const participants = _store.get(draftUUID)
   if (!participants) return
   const p = participants.get(userID)
@@ -112,10 +124,8 @@ async function heartbeat(draftUUID, userID, displayName) {
 
 /**
  * Removes a participant from the store (explicit leave).
- * @param {string} draftUUID
- * @param {string} userID
  */
-async function leave(draftUUID, userID) {
+export async function leave(draftUUID: string, userID: string): Promise<void> {
   const participants = _store.get(draftUUID)
   if (participants) {
     participants.delete(userID)
@@ -129,25 +139,22 @@ async function leave(draftUUID, userID) {
 
 /**
  * Removes ALL participants for a draft (on activation or full cancel).
- * @param {string} draftUUID
  */
-async function removeAll(draftUUID) {
+export async function removeAll(draftUUID: string): Promise<void> {
   _store.delete(draftUUID)
   LOG.debug(`All participants removed for draft ${draftUUID}`)
 
   try {
     await cds.run(DELETE.from('DRAFT.DraftParticipants').where({ DraftUUID: draftUUID }))
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to remove all participants from DB:', err.message)
   }
 }
 
 /**
  * Returns the current participants for a draft.
- * @param {string} draftUUID
- * @returns {Array<{ userID, displayName, lastSeen, isOriginator }>}
  */
-function getParticipants(draftUUID) {
+export function getParticipants(draftUUID: string): ParticipantRecord[] {
   const participants = _store.get(draftUUID)
   if (!participants) return []
   return Array.from(participants.entries()).map(([userID, info]) => ({
@@ -160,53 +167,51 @@ function getParticipants(draftUUID) {
 
 /**
  * Returns whether a user is a participant in a draft.
- * @param {string} draftUUID
- * @param {string} userID
- * @returns {boolean}
  */
-function isParticipant(draftUUID, userID) {
+export function isParticipant(draftUUID: string, userID: string): boolean {
   return _store.get(draftUUID)?.has(userID) ?? false
 }
 
 /**
  * Returns whether a user is the originator of a draft.
- * @param {string} draftUUID
- * @param {string} userID
- * @returns {boolean}
  */
-function isOriginator(draftUUID, userID) {
+export function isOriginator(draftUUID: string, userID: string): boolean {
   return _store.get(draftUUID)?.get(userID)?.isOriginator === true
 }
 
 /**
  * Loads participants from DB into in-memory store (called on bootstrap).
- * Useful when the server restarts and loses in-memory state.
  */
-async function loadFromDB() {
+export async function loadFromDB(): Promise<void> {
   try {
-    const rows = await cds.run(SELECT.from('DRAFT.DraftParticipants'))
+    const rows: any[] = await cds.run(SELECT.from('DRAFT.DraftParticipants'))
     for (const row of rows) {
       if (!_store.has(row.DraftUUID)) _store.set(row.DraftUUID, new Map())
-      _store.get(row.DraftUUID).set(row.UserID, {
+      _store.get(row.DraftUUID)!.set(row.UserID, {
         displayName: row.UserDescription || row.UserID,
         lastSeen: row.LastSeenAt ? new Date(row.LastSeenAt).getTime() : Date.now(),
         isOriginator: row.IsOriginator === true || row.IsOriginator === 1
       })
     }
     LOG.debug(`Loaded ${rows.length} participants from DB`)
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to load participants from DB (table may not exist yet):', err.message)
   }
 }
 
 // ---- DB persistence helpers ----
 
-async function _upsertParticipantInDB(draftUUID, userID, displayName, isOriginator) {
+async function _upsertParticipantInDB(
+  draftUUID: string,
+  userID: string,
+  displayName: string,
+  isOrig: boolean
+): Promise<void> {
   try {
     // Try update first
     const updated = await cds.run(
       UPDATE('DRAFT.DraftParticipants')
-        .data({ UserDescription: displayName, LastSeenAt: new Date(), IsOriginator: isOriginator })
+        .data({ UserDescription: displayName, LastSeenAt: new Date(), IsOriginator: isOrig })
         .where({ DraftUUID: draftUUID, UserID: userID })
     )
     if (!updated) {
@@ -218,34 +223,19 @@ async function _upsertParticipantInDB(draftUUID, userID, displayName, isOriginat
           UserID: userID,
           UserDescription: displayName,
           LastSeenAt: new Date(),
-          IsOriginator: isOriginator
+          IsOriginator: isOrig
         })
       )
     }
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to upsert participant in DB:', err.message)
   }
 }
 
-async function _removeParticipantFromDB(draftUUID, userID) {
+async function _removeParticipantFromDB(draftUUID: string, userID: string): Promise<void> {
   try {
     await cds.run(DELETE.from('DRAFT.DraftParticipants').where({ DraftUUID: draftUUID, UserID: userID }))
-  } catch (err) {
+  } catch (err: any) {
     LOG.warn('Failed to remove participant from DB:', err.message)
   }
-}
-
-module.exports = {
-  join,
-  heartbeat,
-  leave,
-  removeAll,
-  getParticipants,
-  isParticipant,
-  isOriginator,
-  loadFromDB,
-  startCleanup,
-  stopCleanup,
-  // Expose store for testing
-  _store
 }

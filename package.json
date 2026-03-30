@@ -8,6 +8,8 @@
     "node": ">=18"
   },
   "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
     "test": "jest --runInBand",
     "test:watch": "jest --runInBand --watch",
     "test:e2e": "playwright test",
@@ -32,7 +34,8 @@
     "@cap-js/sqlite": "^2.2.0",
     "@playwright/test": "^1.58.2",
     "@sap/cds-dk": "^9.8.2",
-    "jest": "^30.3.0"
+    "jest": "^30.3.0",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "@sap/cds": ">=8.0"
