@@ -56,7 +56,7 @@ This plugin replicates the full OData contract on CAP Node.js, allowing Fiori El
 
 ### Live Demo
 
-<video src="docs/cap-collaborative-draft.mp4" controls width="100%"></video>
+[![Watch the demo](docs/cap-collaborative-draft-preview.png)](docs/cap-collaborative-draft.mp4)
 
 ---
 
