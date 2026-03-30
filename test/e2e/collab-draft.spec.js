@@ -476,6 +476,112 @@ test.describe('Collaborative Draft E2E — OData API contract', () => {
         expect(activateResp.body.NetAmount).toBe(1234.56)
       }
     )
+
+    test('Collaborator (Bob) can create a child item on a shared draft created by Alice',
+      async ({ request }) => {
+        const orderId = await createActiveOrder(request, 'alice', `CI-${Date.now() % 100000}`)
+
+        await startDraftEdit(request, orderId, 'alice')
+
+        // Bob joins via ColDraftShare
+        const shareResp = await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/OrderService.Orders_ColDraftShare`,
+          'bob', {}
+        )
+        expect([200, 204]).toContain(shareResp.status)
+
+        // Bob creates a line item — this previously failed with 403 "locked by user alice"
+        const createItem = await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/Items`,
+          'bob', {
+            ItemNo: 1,
+            Product: 'Widget',
+            Quantity: 5,
+            Price: 19.99
+          }
+        )
+        expect(createItem.status).toBe(201)
+        expect(createItem.body.Product).toBe('Widget')
+        expect(createItem.body.Quantity).toBe(5)
+      }
+    )
+
+    test('Collaborator (Bob) can PATCH a child item on a shared draft created by Alice',
+      async ({ request }) => {
+        const orderId = await createActiveOrder(request, 'alice', `CP-${Date.now() % 100000}`)
+
+        await startDraftEdit(request, orderId, 'alice')
+
+        // Alice creates an item first
+        const createItem = await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/Items`,
+          'alice', { ItemNo: 1, Product: 'Gadget', Quantity: 1, Price: 9.99 }
+        )
+        expect(createItem.status).toBe(201)
+        const itemId = createItem.body.ID
+
+        // Bob joins
+        await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/OrderService.Orders_ColDraftShare`,
+          'bob', {}
+        )
+
+        // Bob patches the item
+        const patchItem = await apiCall(
+          request, 'PATCH',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/Items(ID=${itemId},IsActiveEntity=false)`,
+          'bob', { Quantity: 10 }
+        )
+        expect(patchItem.status).toBe(200)
+        expect(patchItem.body.Quantity).toBe(10)
+      }
+    )
+
+    test('Child items created by collaborator survive activation and appear in active entity',
+      async ({ request }) => {
+        const orderId = await createActiveOrder(request, 'alice', `CA-${Date.now() % 100000}`)
+
+        await startDraftEdit(request, orderId, 'alice')
+
+        await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/OrderService.Orders_ColDraftShare`,
+          'bob', {}
+        )
+
+        // Bob creates an item
+        const createItem = await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/Items`,
+          'bob', { ItemNo: 1, Product: 'BobWidget', Quantity: 3, Price: 15.00 }
+        )
+        expect(createItem.status).toBe(201)
+
+        // Alice activates the draft
+        const activateResp = await apiCall(
+          request, 'POST',
+          `/Orders(ID=${orderId},IsActiveEntity=false)/OrderService.draftActivate`,
+          'alice', {}
+        )
+        expect([200, 201]).toContain(activateResp.status)
+
+        // Verify the item persists on the active entity
+        const itemsResp = await apiCall(
+          request, 'GET',
+          `/Orders(ID=${orderId},IsActiveEntity=true)/Items`,
+          'alice'
+        )
+        expect(itemsResp.status).toBe(200)
+        const items = itemsResp.body.value || []
+        const bobItem = items.find(i => i.Product === 'BobWidget')
+        expect(bobItem).toBeTruthy()
+        expect(bobItem.Quantity).toBe(3)
+      }
+    )
   })
 
 })

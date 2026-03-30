@@ -6,7 +6,7 @@
   "scripts": {
     "start": "cds-serve",
     "dev": "cds watch",
-    "watch-orders": "cds watch --open orders/webapp/test/flpSandbox.html?sap-ui-xx-viewCache=false"
+    "watch-orders": "cds watch --open orders/webapp/test/flpSandbox.html?sap-ui-xx-viewCache=false&useFLPUser=true"
   },
   "dependencies": {
     "@cap-js-community/websocket": "^1.10.0",

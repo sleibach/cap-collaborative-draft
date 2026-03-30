@@ -48,6 +48,11 @@ function _injectWsServiceIntoCSN(csn) {
     '@ws.pcp.action': 'CollaborativeDraftChanged',
     elements: { ..._eventElements }
   }
+  // wsConnect: triggered when a new WS client connects — used to tag the socket with user identity
+  csn.definitions['CollabDraftWebSocketService.wsConnect'] = {
+    kind: 'action',
+    params: {}
+  }
   // MESSAGE: FE sends collaboration protocol (JOIN, LOCK, CHANGE, LEAVE) as PCP
   // frames with pcp-action:MESSAGE. The payload is in PCP HEADER fields, not the body.
   // We define both action (client→server) and event (server→client broadcast) with
@@ -107,12 +112,17 @@ cds.on('bootstrap', app => {
       res.set('WWW-Authenticate', 'Basic realm="CAP"')
       return res.status(401).json({ error: 'Unauthorized' })
     }
-    const displayName = id.charAt(0).toUpperCase() + id.slice(1)
+    const mockedUsers = cds.env?.requires?.auth?.users ?? {}
+    const userConfig = mockedUsers[id] ?? {}
+    const fullName = userConfig.displayName || (id.charAt(0).toUpperCase() + id.slice(1))
+    const nameParts = fullName.trim().split(/\s+/)
+    const firstName = nameParts[0] || id
+    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : ''
     res.json({
       name: id,
-      displayName,
-      firstName: displayName,
-      lastName: '',
+      displayName: fullName,
+      firstName,
+      lastName,
       email: `${id}@example.com`,
       isAuthenticated: true
     })
@@ -211,6 +221,7 @@ cds.on('bootstrap', app => {
         const complexType = [
           `\n    <ComplexType Name="ColDraftShareUser">`,
           `\n        <Property Name="UserID" Type="Edm.String" MaxLength="256"/>`,
+          `\n        <Property Name="UserAccessRole" Type="Edm.String" MaxLength="1"/>`,
           `\n    </ComplexType>`
         ].join('')
         body = body.replace('</Schema>', complexType + '\n</Schema>')
@@ -224,7 +235,22 @@ cds.on('bootstrap', app => {
         LOG.debug('[collab-draft] Injected ColDraftShareUser ComplexType + fixed Users param in $metadata')
       }
 
-      // ── 6. Inject WebSocket annotations if @cap-js-community/websocket is installed ──
+      // ── 6. Inject ValueListRelevantQualifiers on ColDraftShareUser/UserID ──
+      // Prevents FE ValueHelpDelegate crash when opening the "Search User" field.
+      if (!body.includes('ColDraftShareUser/UserID')) {
+        const vlAnnotation = [
+          `\n    <Annotations Target="${ns}.ColDraftShareUser/UserID">`,
+          `\n        <Annotation Term="Common.ValueListRelevantQualifiers">`,
+          `\n            <Collection/>`,
+          `\n        </Annotation>`,
+          `\n    </Annotations>`
+        ].join('')
+        body = body.replace('</Schema>', vlAnnotation + '\n</Schema>')
+        changed = true
+        LOG.debug('[collab-draft] Injected ValueListRelevantQualifiers on ColDraftShareUser/UserID')
+      }
+
+      // ── 7. Inject WebSocket annotations if @cap-js-community/websocket is installed ──
       // These annotations wire FE's SideEffects mechanism to the WS service.
       // We inject them if not already present (to avoid duplicates if consumer also configures them).
       if (_wsAvailable && !body.includes('Common.WebSocketBaseURL')) {
@@ -256,7 +282,7 @@ cds.on('bootstrap', app => {
         LOG.debug('[collab-draft] Injected WebSocket annotations into $metadata')
       }
 
-      // ── 6. Inject Common.SideEffects for collaborative draft events ──
+      // ── 8. Inject Common.SideEffects for collaborative draft events ──
       // These annotations tell FE to re-read entity data when WS events are received.
       if (_wsAvailable && !body.includes('Common.SideEffects" Qualifier="CollaborativePresenceChanged"')) {
         const sideEffectsXml = [
@@ -438,55 +464,90 @@ cds.on('served', async services => {
     try {
       const wsService = await cds.connect.to('CollabDraftWebSocketService')
       if (wsService) {
+        // Tag each WS socket with user identity at connect time.
+        // The @cap-js-community/websocket plugin strips query params from request.url
+        // and stores them in request.queryOptions, so we read from there.
+        wsService.on('wsConnect', async (msg) => {
+          const ws = cds.context?.ws?.socket
+          if (!ws) return
+          try {
+            const qo = ws.request?.queryOptions || {}
+            const uid = qo.userID
+            const uname = qo.userName
+            if (uid) {
+              const mockedUsers = cds.env?.requires?.auth?.users ?? {}
+              ws._collabUser = {
+                id: uid,
+                name: uname || mockedUsers[uid]?.displayName || (uid.charAt(0).toUpperCase() + uid.slice(1))
+              }
+              ws._collabDraft = qo.draft || null
+              LOG.info(`[collab-draft] WS connected: tagged socket with user ${uid} (draft=${qo.draft})`)
+            } else {
+              ws._collabDraft = qo.draft || null
+              LOG.info(`[collab-draft] WS connected: no userID in queryOptions (keys: ${Object.keys(qo).join(',')})`)
+            }
+          } catch (e) { LOG.debug('[collab-draft] wsConnect tagging error:', e.message) }
+        })
+
         wsService.on('MESSAGE', async (msg) => {
           const d = msg.data || {}
-          // Resolve sender identity from the presence store.
-          // The WS service is unauthenticated (CAP's auth doesn't work for WS upgrade).
-          // We extract the draft UUID from the WS connection URL (?draft=<uuid>) and find
-          // the most recently active participant — that's the sender of this message.
-          let userId = 'anonymous', displayName = 'Anonymous'
-          try {
-            // Try WS URL draft param first
-            const wsUrl = cds.context?.ws?.socket?.request?.url || ''
-            const draftMatch = wsUrl.match(/[?&]draft=([^&]+)/)
-            let draftUUID = draftMatch?.[1]
+          // Resolve sender from WS URL query params (?useFLPUser=true makes FE include userID/userName).
+          // Fallback chain: Basic Auth header on WS upgrade → presence store heuristic.
+          // Cache user identity on the WS socket after first resolution to avoid
+          // repeated lookups and ensure consistency across messages.
+          const wsSocket = cds.context?.ws?.socket
+          let userId = wsSocket?._collabUser?.id || 'anonymous'
+          let userName = wsSocket?._collabUser?.name || ''
+          let draftUUID = null
 
-            // Fallback: extract entity ID from clientContent and find the draft
-            if (!draftUUID && d.clientContent) {
-              const idMatch = d.clientContent.match(/ID=([0-9a-f-]{36})/i)
-              if (idMatch) {
-                const entityID = idMatch[1]
-                // Search all drafts in presence store for one that has this entity
-                for (const [uuid, participantMap] of presence._store) {
-                  draftUUID = uuid
-                  break
+          if (userId === 'anonymous') {
+            try {
+              // The WS plugin stores query params in request.queryOptions (not in request.url).
+              const qo = wsSocket?.request?.queryOptions || {}
+              draftUUID = qo.draft || wsSocket?._collabDraft || null
+
+              // 1. Read userID/userName from WS URL query params
+              if (qo.userID) {
+                userId = qo.userID
+                userName = qo.userName || ''
+              }
+
+              // 2. Fallback: Basic Auth header on WS upgrade request
+              if (userId === 'anonymous') {
+                const authHeader = wsSocket?.request?.headers?.authorization
+                if (authHeader?.startsWith('Basic ')) {
+                  userId = Buffer.from(authHeader.slice(6), 'base64').toString().split(':')[0] || 'anonymous'
                 }
-                // Better: look up from DB
-                try {
-                  const rows = await cds.db.run(
-                    `SELECT DraftAdministrativeData_DraftUUID FROM OrderService_Orders_drafts WHERE ID = ?`,
-                    [entityID]
-                  )
-                  const val = Array.isArray(rows) ? rows[0]?.DraftAdministrativeData_DraftUUID : rows?.DraftAdministrativeData_DraftUUID
-                  if (val) draftUUID = val
-                } catch {}
               }
-            }
 
-            if (draftUUID) {
-              const participants = presence.getParticipants(draftUUID)
-              LOG.info(`[collab-draft] MESSAGE resolve: draftUUID=${draftUUID}, ${participants.length} participant(s)`)
-              if (participants.length > 0) {
-                const sorted = [...participants].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
-                userId = sorted[0].userID
-                displayName = sorted[0].displayName || userId
+              // 3. Fallback: presence store — find the sender among draft participants
+              if (userId === 'anonymous' && draftUUID) {
+                const participants = presence.getParticipants(draftUUID)
+                if (participants.length === 1) {
+                  userId = participants[0].userID
+                  userName = participants[0].displayName || ''
+                } else if (participants.length > 1) {
+                  const sorted = [...participants].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
+                  userId = sorted[0].userID
+                  userName = sorted[0].displayName || ''
+                }
               }
-            } else {
-              LOG.info(`[collab-draft] MESSAGE resolve: no draftUUID found. wsUrl=${wsUrl.substring(0,80)}, clientContent=${d.clientContent}`)
-            }
-          } catch (e) { LOG.info('[collab-draft] MESSAGE resolve error:', e.message) }
-          if (userId !== 'anonymous') {
-            displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1) + ' User'
+
+              // 4. Resolve display name from mock user config
+              if (!userName && userId !== 'anonymous') {
+                const mockedUsers = cds.env?.requires?.auth?.users ?? {}
+                userName = mockedUsers[userId]?.displayName || (userId.charAt(0).toUpperCase() + userId.slice(1))
+              }
+
+              // Cache on socket for subsequent messages
+              if (userId !== 'anonymous' && wsSocket) {
+                wsSocket._collabUser = { id: userId, name: userName }
+              }
+            } catch (e) { LOG.info('[collab-draft] MESSAGE user resolve error:', e.message) }
+          }
+
+          if (!draftUUID) {
+            draftUUID = wsSocket?.request?.queryOptions?.draft || wsSocket?._collabDraft || null
           }
           const relayData = {
             userAction: d.clientAction || '',
@@ -496,9 +557,9 @@ cds.on('served', async services => {
             clientRefreshListBinding: d.clientRefreshListBinding || '',
             clientRequestedProperties: d.clientRequestedProperties || '',
             userID: userId,
-            userDescription: displayName
+            userDescription: userName || userId
           }
-          LOG.info(`[collab-draft] Relaying MESSAGE: ${d.clientAction} ${d.clientContent} by ${userId}`)
+          LOG.info(`[collab-draft] Relaying MESSAGE: ${d.clientAction} by ${userId} (${userName})`)
           try {
             const wsFacade = cds.context?.ws?.service
             if (wsFacade?.broadcast) {
@@ -513,23 +574,12 @@ cds.on('served', async services => {
               if (needsEcho && ['JOIN', 'JOINECHO', 'LOCK'].includes(d.clientAction)) {
                 wsSocket._collabJoinEchoed = true
                 try {
-                  let draftUUID2 = null
-                  const wsUrl2 = cds.context?.ws?.socket?.request?.url || ''
-                  const dm2 = wsUrl2.match(/[?&]draft=([^&]+)/)
-                  draftUUID2 = dm2?.[1]
-                  if (!draftUUID2 && d.clientContent) {
-                    const idM = d.clientContent.match(/ID=([0-9a-f-]{36})/i)
-                    if (idM) {
-                      const rows = await cds.db.run(`SELECT DraftAdministrativeData_DraftUUID FROM OrderService_Orders_drafts WHERE ID = ?`, [idM[1]])
-                      draftUUID2 = (Array.isArray(rows) ? rows[0] : rows)?.DraftAdministrativeData_DraftUUID
-                    }
-                  }
-                  if (draftUUID2) {
-                    const allParticipants = presence.getParticipants(draftUUID2)
+                  if (draftUUID) {
+                    const allParticipants = presence.getParticipants(draftUUID)
+                    const _mockedUsers = cds.env?.requires?.auth?.users ?? {}
                     for (const p of allParticipants) {
                       if (p.userID === userId) continue
-                      const pBase = (p.displayName || p.userID)
-                      const pName = pBase.charAt(0).toUpperCase() + pBase.slice(1) + ' User'
+                      const pName = _mockedUsers[p.userID]?.displayName || p.displayName || p.userID
                       await wsFacade.emit('message', {
                         ...relayData,
                         userAction: 'JOINECHO',
@@ -547,7 +597,7 @@ cds.on('served', async services => {
           } catch (err) {
             LOG.debug('[collab-draft] MESSAGE relay failed:', err.message)
           }
-        3})
+        })
         LOG.info('[collab-draft] Registered MESSAGE relay handler for collaborative draft WS')
       }
     } catch (err) {

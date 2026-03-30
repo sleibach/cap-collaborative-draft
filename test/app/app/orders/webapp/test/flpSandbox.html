@@ -23,13 +23,19 @@
          for productive scenarios.
     -->
     <script type="text/javascript">
-        // Resolve Shell user from the authenticated CAP user.
-        // 1) Synchronously fetch /user-api/currentUser (provided by cap-collaborative-draft plugin)
-        //    — uses the Basic Auth credentials cached by the browser.
-        // 2) Fall back to ?sap-user= query parameter.
-        // 3) Fall back to "Default User".
+        // Ensure useFLPUser=true is set so FE sends userID/userName in the WS URL.
         (function() {
-            var user = "Default User", displayName = "Default User", email = "";
+            var sp = new URLSearchParams(location.search);
+            if (sp.get('useFLPUser') !== 'true') {
+                sp.set('useFLPUser', 'true');
+                location.search = sp.toString();
+                return;
+            }
+        })();
+
+        // Resolve Shell user from the authenticated CAP user.
+        (function() {
+            var user = "Default User", displayName = "Default User", firstName = "", lastName = "", email = "";
             try {
                 var xhr = new XMLHttpRequest();
                 xhr.open("GET", "/user-api/currentUser", false);
@@ -39,6 +45,8 @@
                     if (u.name && u.name !== "anonymous") {
                         user = u.name;
                         displayName = u.displayName || u.firstName || user;
+                        firstName = u.firstName || displayName;
+                        lastName = u.lastName || "";
                         email = u.email || "";
                     }
                 }
@@ -58,13 +66,26 @@
                 services: {
                     Container: {
                         adapter: {
-                            config: {
-                                id: user,
-                                firstName: displayName,
-                                lastName: "User",
-                                fullName: displayName + " User",
-                                email: email || user + "@example.com"
-                            }
+                            config: (function() {
+                                // Compute firstName/lastName so Shell getInitials() matches
+                                // FE's formatInitials: 2+ words → first char of each;
+                                // 1 word → first 2 chars (Shell uppercases both automatically).
+                                var parts = displayName.trim().split(/\s+/);
+                                var fn, ln;
+                                if (parts.length >= 2) {
+                                    fn = parts[0]; ln = parts.slice(1).join(" ");
+                                } else {
+                                    fn = displayName;
+                                    ln = displayName.length > 1 ? displayName.substring(1) : "";
+                                }
+                                return {
+                                    id: user,
+                                    firstName: fn,
+                                    lastName: ln,
+                                    fullName: displayName,
+                                    email: email || user + "@example.com"
+                                };
+                            })()
                         }
                     }
                 },
