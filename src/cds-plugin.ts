@@ -302,6 +302,29 @@ cds.on('bootstrap', (app: any) => {
         }
       )
 
+      // e) Inject DraftMessages NavigationProperty into every collaborative EntityType if absent.
+      // Handles the case where CAP skips virtual compositions entirely in OData metadata generation
+      // (no structural Property is emitted, so step (a) replacement never fires). Without this,
+      // the EntityType has no DraftMessages element at all and the OData V4 metamodel reports
+      // "invalid segment: DraftMessages" when FE tries to navigate to it.
+      {
+        const esRegex = /<EntitySet Name="([^"]+)"[^>]*EntityType="[^"]*\.([^"]+)"[^>]*>/g
+        let esMatch: RegExpExecArray | null
+        while ((esMatch = esRegex.exec(body)) !== null) {
+          const [, setName, entityTypeName] = esMatch
+          if (!body.includes(`${setName}_ColDraftShare`)) continue
+          const etRegex = new RegExp(`(<EntityType Name="${entityTypeName}"[\\s\\S]*?)(</EntityType>)`)
+          const etMatch = etRegex.exec(body)
+          if (!etMatch || etMatch[0].includes('NavigationProperty Name="DraftMessages"')) continue
+          body = body.replace(
+            etRegex,
+            (_full: string, etContent: string, closing: string) =>
+              `${etContent}        <NavigationProperty Name="DraftMessages" Type="Collection(${ns}.DraftMessages)" ContainsTarget="true"/>\n    ${closing}`
+          )
+          changed = true
+        }
+      }
+
       if (changed) LOG.debug('Injected DraftMessages NavigationProperty into $metadata')
 
       // ── 8. Inject WebSocket annotations ──
@@ -551,10 +574,18 @@ cds.on('served', async (services: Record<string, any>) => {
           if (!draftUUID) {
             draftUUID = wsSocket?.request?.queryOptions?.draft || wsSocket?._collabDraft || null
           }
+          // Normalize clientContent: strip qualified action invocations from the end of the path.
+          // FE sends messages with clientContent = "/Orders(ID=...)/NS.ActionName(...)" after
+          // invoking bound actions (e.g. ColDraftShare). Receiving clients' ODataMetaModel calls
+          // fetchCanonicalPath() on clientContent and fails — actions are not navigation properties.
+          // Strip the action segment so other clients receive just "/Orders(ID=...)" as intended.
+          let clientContent: string = d.clientContent || ''
+          clientContent = clientContent.replace(/\/[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9_]*\([^)]*\)$/, '')
+
           const relayData = {
             userAction: d.clientAction || '',
             clientAction: d.clientAction || '',
-            clientContent: d.clientContent || '',
+            clientContent,
             clientTriggeredActionName: d.clientTriggeredActionName || '',
             clientRefreshListBinding: d.clientRefreshListBinding || '',
             clientRequestedProperties: d.clientRequestedProperties || '',

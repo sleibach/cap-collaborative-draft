@@ -2,60 +2,19 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>Manage Orders</title>
-    <style>
-        html, body, body > div, #container, #container-uiarea {
-            height: 100%;
-        }
-    </style>
-    <!-- Minimal ushell shim for standalone FE testing.
-         Provides sap.ushell.Container.getUser() which FE requires for
-         collaborative draft user identification.
-         Use ?sap-user=alice in the URL to set the user identity. -->
     <script>
-        (function() {
-            var userId = new URLSearchParams(location.search).get('sap-user') || 'developer';
-            var userDesc = userId.charAt(0).toUpperCase() + userId.slice(1);
-            window.sap = window.sap || {};
-            window.sap.ushell = window.sap.ushell || {};
-            if (!window.sap.ushell.Container) {
-                window.sap.ushell.Container = {
-                    getUser: function() {
-                        return {
-                            getId: function() { return userId; },
-                            getFullName: function() { return userDesc; },
-                            getEmail: function() { return userId + '@example.com'; },
-                            getImage: function() { return ''; }
-                        };
-                    },
-                    getServiceAsync: function() { return Promise.resolve({}); },
-                    getLogonSystem: function() { return { getName: function() { return 'LOCAL'; } }; }
-                };
+        // Collaborative draft requires sap.ushell.Container (FLP shell).
+        // Redirect to flpSandbox.html which provides a full FLP environment.
+        // Preserves all existing query parameters and adds useFLPUser=true.
+        (function () {
+            var search = location.search
+            if (search.indexOf('useFLPUser=true') === -1) {
+                search = search ? search + '&useFLPUser=true' : '?useFLPUser=true'
             }
-        })();
+            location.replace('test/flpSandbox.html' + search + location.hash)
+        })()
     </script>
-    <script
-        id="sap-ui-bootstrap"
-        src="https://sapui5.hana.ondemand.com/1.146.0/resources/sap-ui-core.js"
-        data-sap-ui-theme="sap_horizon"
-        data-sap-ui-resourceroots='{
-            "orders": "./"
-        }'
-        data-sap-ui-oninit="module:sap/ui/core/ComponentSupport"
-        data-sap-ui-compatVersion="edge"
-        data-sap-ui-async="true"
-        data-sap-ui-frameOptions="trusted"
-    ></script>
 </head>
-<body class="sapUiBody sapUiSizeCompact" id="content">
-    <div
-        data-sap-ui-component
-        data-name="orders"
-        data-id="container"
-        data-settings='{"id" : "orders"}'
-        data-handle-validation="true"
-    ></div>
-</body>
+<body></body>
 </html>

@@ -1,4 +1,10 @@
 /**
+ * Event name emitted when ColDraftShare is called with Users to invite.
+ * App code can listen: cds.on('collab-draft:shareInvite', ({ draftUUID, invitedBy, users }) => { ... })
+ * Each entry in `users` has: { UserID: string, UserAccessRole?: string }
+ */
+export declare const SHARE_INVITE_EVENT = "collab-draft:shareInvite";
+/**
  * Returns all service entities that have @CollaborativeDraft.enabled
  */
 export declare function getCollaborativeEntities(srv: any): Set<string>;

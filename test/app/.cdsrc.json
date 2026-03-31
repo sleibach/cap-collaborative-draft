@@ -14,5 +14,10 @@
     "levels": {
       "collab-draft": "debug"
     }
+  },
+  "server": {
+    "launch": {
+      "open": "orders/webapp/test/flpSandbox.html?useFLPUser=true"
+    }
   }
 }

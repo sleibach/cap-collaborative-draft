@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.SHARE_INVITE_EVENT = void 0;
 exports.getCollaborativeEntities = getCollaborativeEntities;
 exports.registerHandlers = registerHandlers;
 const cds = require("@sap/cds");
@@ -40,6 +41,15 @@ const presence = __importStar(require("./presence"));
 const fieldLocks = __importStar(require("./field-locks"));
 const merge = __importStar(require("./merge"));
 const LOG = cds.log('collab-draft');
+/**
+ * Event name emitted when ColDraftShare is called with Users to invite.
+ * App code can listen: cds.on('collab-draft:shareInvite', ({ draftUUID, invitedBy, users }) => { ... })
+ * Each entry in `users` has: { UserID: string, UserAccessRole?: string }
+ */
+exports.SHARE_INVITE_EVENT = 'collab-draft:shareInvite';
+// Temporary store for pending invite messages keyed by entityID.
+// Consumed once by the DraftMessages READ handler (cleared after first read).
+const _pendingInviteMessages = new Map();
 /**
  * Emits a WebSocket side-effect event.
  */
@@ -490,7 +500,16 @@ function registerHandlers(srv, collaborativeEntities) {
     // collaborating users. We return an empty collection — CAP's own validation mechanism
     // (@Core.Messages / req.error()) is the authoritative source for errors on PATCH/activate.
     //
-    srv.on('READ', 'DraftMessages', async function onReadDraftMessages(_req) {
+    srv.on('READ', 'DraftMessages', async function onReadDraftMessages(req) {
+        // Return pending invite feedback messages, then clear them.
+        // FE reads DraftMessages after ColDraftShare; returning messages here avoids
+        // the "No additional users were invited to ..." toast.
+        const entityID = req.params?.[0]?.ID ?? req.params?.[0]?.id;
+        if (entityID && _pendingInviteMessages.has(entityID)) {
+            const msgs = _pendingInviteMessages.get(entityID);
+            _pendingInviteMessages.delete(entityID);
+            return msgs;
+        }
         return [];
     });
     // ── READ on DraftAdministrativeUser — serve participants ─────────────────────
@@ -696,6 +715,30 @@ function registerHandlers(srv, collaborativeEntities) {
                 return;
             }
             LOG.debug(`${actionName}: user ${req.user.id} joining draft ${draftUUID}`);
+            // If Users param is present, this is an explicit invite from the share dialog.
+            // Emit event for app code to send notifications, and queue DraftMessages feedback.
+            // FE includes the calling user in the Users array (as originator/self).
+            // Only treat entries for *other* users as actual invitations.
+            const invitedUsers = (req.data?.Users || []).filter((u) => u.UserID !== req.user.id);
+            if (invitedUsers.length > 0) {
+                LOG.debug(`${actionName}: inviting ${invitedUsers.length} user(s) on behalf of ${req.user.id}`);
+                cds.emit(exports.SHARE_INVITE_EVENT, { draftUUID, invitedBy: req.user.id, users: invitedUsers });
+                const entityKeyObj = req.params?.[0];
+                if (entityKeyObj?.ID) {
+                    const msgs = invitedUsers.map(u => ({
+                        DraftUUID: draftUUID,
+                        FieldName: '',
+                        IsActiveEntity: false,
+                        Message: `Invitation sent to ${u.UserID}`,
+                        NumericSeverity: 1,
+                        Target: '',
+                        Transition: true
+                    }));
+                    _pendingInviteMessages.set(entityKeyObj.ID, msgs);
+                    // Auto-clear after 15 seconds in case DraftMessages is never read
+                    setTimeout(() => _pendingInviteMessages.delete(entityKeyObj.ID), 15000);
+                }
+            }
             try {
                 if (!presence.isParticipant(draftUUID, req.user.id)) {
                     await presence.join(draftUUID, req.user.id, {

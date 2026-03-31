@@ -194,7 +194,7 @@ Handlers are prepended before CAP's built-in lean-draft handlers so they execute
 | `after READ DraftAdministrativeData` | Populates `CollaborativeDraftEnabled` (boolean) and `DraftAccessType` by inspecting the presence store and the DB record. Ensures the response always carries proper JSON booleans (not SQLite integers). |
 | `READ DraftAdministrativeUser` | Resolves participants from the in-memory presence store (with DB fallback) and maps them to the `{DraftUUID, UserID, UserDescription, UserEditingState}` shape expected by Fiori Elements. |
 | `READ ColDraftUsers` | Serves the user directory for the invite dialog value help. See [User Directory](#user-directory). |
-| `<EntityName>_ColDraftShare` | Handles the bound share action. Registers the specified users as participants, sets `DraftAccessType = 'S'` and `CollaborativeDraftEnabled = 1` in the DB, and broadcasts a `CollaborativePresenceChanged` WebSocket event if WebSocket is available. |
+| `<EntityName>_ColDraftShare` | Handles the bound share action. On self-join (`ShareAll: true`, empty `Users`): registers the calling user as participant, sets `DraftAccessType = 'S'` and `CollaborativeDraftEnabled = 1`, broadcasts `CollaborativePresenceChanged` via WebSocket. On explicit invite (`Users` non-empty): additionally emits the `collab-draft:shareInvite` event for app code to send notifications, and queues `DraftMessages` feedback so FE shows a confirmation toast. |
 
 ### Presence Tracking
 
@@ -357,7 +357,9 @@ Referenced via `@Common.DraftRoot.ShareAction = 'OrderService.Orders_ColDraftSha
 The action accepts:
 
 - `ShareAll: true` with an empty `Users` array — registers the calling user as a participant (self-join, called by the Fiori Elements client on draft open).
-- A non-empty `Users` array — invites specific users, setting them as participants in `DRAFT.DraftParticipants`.
+- A non-empty `Users` array — records the invitation intent, emits a `collab-draft:shareInvite` event for application code to act on (see [Events](#events)), and returns feedback messages via `DraftMessages` so Fiori Elements shows a confirmation toast instead of "No additional users were invited".
+
+The plugin does **not** send any notification itself — the application is responsible for actually reaching out to the invited users (see [Events](#events)).
 
 ### ColDraftUsers Entity
 
@@ -397,6 +399,40 @@ All settings are namespaced under `cds.collab` and can be set in `package.json` 
 | `lockTtlMs` | `number` | `120000` (2 min) | Milliseconds after a PATCH before a field lock is considered stale and non-blocking. |
 | `cleanupIntervalMs` | `number` | `30000` (30 s) | How frequently the background cleanup timer scans for stale presence entries. |
 | `users` | `object` | `undefined` | Static user directory for the invite value help. Each key is a `UserID`; values may carry `displayName`. Falls back to `cds.env.requires.auth.users` if not set. |
+
+---
+
+## Events
+
+The plugin emits CDS events that application code can subscribe to. Register listeners in your CAP service file or in a custom `cds-plugin.js`.
+
+### `collab-draft:shareInvite`
+
+Emitted when the Fiori Elements share dialog submits a list of users to invite (i.e. the `Users` parameter of `ColDraftShare` is non-empty). The plugin does not send any notification — this event is the hook for application code to do so.
+
+```js
+const cds = require('@sap/cds')
+const { SHARE_INVITE_EVENT } = require('cap-collaborative-draft/lib/draft-handlers')
+
+cds.on(SHARE_INVITE_EVENT, ({ draftUUID, invitedBy, users }) => {
+  // users: Array<{ UserID: string, UserAccessRole?: string }>
+  for (const user of users) {
+    sendInviteEmail({ to: user.UserID, draftUUID, invitedBy })
+  }
+})
+```
+
+Or use the event name string directly:
+
+```js
+cds.on('collab-draft:shareInvite', ({ draftUUID, invitedBy, users }) => { ... })
+```
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `draftUUID` | `string` | UUID of the draft being shared |
+| `invitedBy` | `string` | `req.user.id` of the user who triggered the invite |
+| `users` | `Array<{ UserID, UserAccessRole? }>` | Users selected in the invite dialog |
 
 ---
 
