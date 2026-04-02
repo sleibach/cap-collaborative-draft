@@ -1,9 +1,9 @@
 'use strict'
 
 const cds = require('@sap/cds')
-const merge = require('../../lib/merge')
-const fieldLocks = require('../../lib/field-locks')
-const presence = require('../../lib/presence')
+const merge = require('../../dist/lib/merge')
+const fieldLocks = require('../../dist/lib/field-locks')
+const presence = require('../../dist/lib/presence')
 
 cds.test(__dirname + '/../app')
 

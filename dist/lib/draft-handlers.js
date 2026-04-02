@@ -40,7 +40,23 @@ const cds = require("@sap/cds");
 const presence = __importStar(require("./presence"));
 const fieldLocks = __importStar(require("./field-locks"));
 const merge = __importStar(require("./merge"));
+const config_1 = require("./config");
 const LOG = cds.log('collab-draft');
+// ── Private raw-SQL helpers ─────────────────────────────────────────────────
+// These target the physical DRAFT_DraftAdministrativeData table directly
+// because the columns CollaborativeDraftEnabled and DraftAccessType are added
+// via ALTER TABLE (not in the CDS model) and are therefore not reachable via
+// the CDS fluent query API.
+async function _setSharedDraft(draftUUID) {
+    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['S', draftUUID]);
+}
+async function _getCreatedByUser(draftUUID) {
+    const rows = await cds.db.run('SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?', [draftUUID]);
+    return Array.isArray(rows) ? (rows[0]?.CreatedByUser ?? null) : (rows?.CreatedByUser ?? null);
+}
+async function _setInProcessByUser(draftUUID, userID) {
+    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET InProcessByUser = ? WHERE DraftUUID = ?', [userID, draftUUID]);
+}
 /**
  * Event name emitted when ColDraftShare is called with Users to invite.
  * App code can listen: cds.on('collab-draft:shareInvite', ({ draftUUID, invitedBy, users }) => { ... })
@@ -160,20 +176,22 @@ function getUserDisplayName(req) {
 function registerHandlers(srv, collaborativeEntities) {
     const collaborativeSubtree = getCollaborativeSubtree(srv, collaborativeEntities);
     //
-    // ── srv.handle wrapper — pre-update InProcessByUser before lean_draft's lock check ──
+    // ── srv.handle wrapper — pre-set InProcessByUser before lean_draft's lock check ──
+    //
+    // NOTE: srv.before('*') cannot be used here. lean_draft wraps srv.handle and runs
+    // its DRAFT_LOCKED_BY_ANOTHER_USER check inside that wrapper, before any srv.before
+    // handlers fire. Re-wrapping srv.handle is the only way to inject logic that runs
+    // before lean_draft's lock check for all request types (PATCH, POST/actions, etc.).
     //
     const _origHandle = srv.handle.bind(srv);
     srv.handle = async function collabDraftHandle(req) {
-        let _collabDraftUUID = null;
         const keyObj = req.params?.[0];
-        const isForDraft = keyObj?.IsActiveEntity === false;
-        const entityID = isForDraft ? (keyObj?.ID ?? null) : null;
-        if (isForDraft && entityID && isCollaborativeTarget(req, collaborativeSubtree)) {
+        if (keyObj?.IsActiveEntity === false && keyObj?.ID && isCollaborativeTarget(req, collaborativeSubtree)) {
             try {
                 const draftUUID = await _lookupDraftUUID(req, srv, collaborativeEntities);
                 if (draftUUID && await _isDraftCollaborative(draftUUID)) {
-                    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET InProcessByUser = ? WHERE DraftUUID = ?', [req.user.id, draftUUID]);
-                    _collabDraftUUID = draftUUID;
+                    await _setInProcessByUser(draftUUID, req.user.id);
+                    req._collabDraftUUID = draftUUID;
                     LOG.debug(`Pre-set InProcessByUser=${req.user.id} for collab draft ${draftUUID} (event: ${req.event})`);
                 }
             }
@@ -181,30 +199,43 @@ function registerHandlers(srv, collaborativeEntities) {
                 LOG.debug('Could not pre-set InProcessByUser:', err.message);
             }
         }
-        let result;
+        return _origHandle(req);
+    };
+    //
+    // ── on READ * (around) — suppress stale 404 after draft activation ──────────
+    // When a user has the draft open and another participant activates it,
+    // FE re-reads the draft entity and receives 404 (it no longer exists as a draft).
+    // Returning null here lets FE handle the transition gracefully.
+    //
+    srv.on('READ', '*', async function suppressActivatedDraftRead(req, next) {
+        if (!isCollaborativeTarget(req, collaborativeSubtree) || req.params?.[0]?.IsActiveEntity !== false) {
+            return next();
+        }
         try {
-            result = await _origHandle(req);
+            return await next();
         }
         catch (err) {
-            if (err.code === '404' && req.event === 'READ' &&
-                isCollaborativeTarget(req, collaborativeSubtree) &&
-                req.params?.[0]?.IsActiveEntity === false) {
+            if (err.code === '404') {
                 LOG.debug(`Suppressed 404 for draft READ after activation: ${req.params?.[0]?.ID}`);
                 return null;
             }
             throw err;
         }
-        // Emit CollaborativeDraftChanged for child entity mutations in a collaborative draft.
-        if (_collabDraftUUID && result != null &&
-            !isCollaborativeTarget(req, collaborativeEntities) &&
-            req.event !== 'READ') {
-            const rootCtx = await _resolveCollabRootContext(_collabDraftUUID, srv, collaborativeEntities).catch(() => null);
-            if (rootCtx) {
-                emitCollabEvent('CollaborativeDraftChanged', rootCtx.entitySetName, rootCtx.entityID, { id: req.user?.id, name: getUserDisplayName(req) }).catch(() => { });
-            }
+    });
+    //
+    // ── after * — emit CollaborativeDraftChanged for child entity mutations ──────
+    //
+    srv.after('*', '*', async function emitCollabChanged(result, req) {
+        const draftUUID = req._collabDraftUUID ?? null;
+        if (!draftUUID || result == null || req.event === 'READ')
+            return;
+        if (isCollaborativeTarget(req, collaborativeEntities))
+            return;
+        const rootCtx = await _resolveCollabRootContext(draftUUID, srv, collaborativeEntities).catch(() => null);
+        if (rootCtx) {
+            emitCollabEvent('CollaborativeDraftChanged', rootCtx.entitySetName, rootCtx.entityID, { id: req.user?.id, name: getUserDisplayName(req) }).catch(() => { });
         }
-        return result;
-    };
+    });
     //
     // ── EDIT handler ──────────────────────────────────────────────────────────────
     //
@@ -238,9 +269,7 @@ function registerHandlers(srv, collaborativeEntities) {
             LOG.debug(`User ${req.user.id} joining existing draft ${draftUUID}`);
             let isOrig = false;
             try {
-                const adminRows = await cds.db.run(`SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
-                const createdBy = Array.isArray(adminRows) ? adminRows[0]?.CreatedByUser : adminRows?.CreatedByUser;
-                isOrig = createdBy === req.user.id;
+                isOrig = (await _getCreatedByUser(draftUUID)) === req.user.id;
             }
             catch { }
             await presence.join(draftUUID, req.user.id, {
@@ -296,7 +325,7 @@ function registerHandlers(srv, collaborativeEntities) {
             });
         }
         try {
-            await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['S', draftUUID]);
+            await _setSharedDraft(draftUUID);
         }
         catch (err) {
             LOG.debug('Could not set DraftAccessType:', err.message);
@@ -437,9 +466,7 @@ function registerHandlers(srv, collaborativeEntities) {
                 return next();
             let isOrig = false;
             try {
-                const adminRows = await cds.db.run(`SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
-                const createdBy = Array.isArray(adminRows) ? adminRows[0]?.CreatedByUser : adminRows?.CreatedByUser;
-                isOrig = createdBy === req.user.id;
+                isOrig = (await _getCreatedByUser(draftUUID)) === req.user.id;
             }
             catch (err) {
                 LOG.debug('Could not look up CreatedByUser for CANCEL:', err.message);
@@ -608,7 +635,7 @@ function registerHandlers(srv, collaborativeEntities) {
     // ── READ on ColDraftUsers — serve available users for invite value help ────────
     //
     srv.on('READ', 'ColDraftUsers', async function onReadColDraftUsers(req) {
-        const collabUsersConfig = cds.env.collab?.users;
+        const collabUsersConfig = (0, config_1.collabConfig)().users;
         // ── Entity-backed mode (enterprise: real DB table / projection) ──────────────
         // Activated when cds.env.collab.users is an object with an `entity` key.
         //
@@ -735,8 +762,10 @@ function registerHandlers(srv, collaborativeEntities) {
                         Transition: true
                     }));
                     _pendingInviteMessages.set(entityKeyObj.ID, msgs);
-                    // Auto-clear after 15 seconds in case DraftMessages is never read
-                    setTimeout(() => _pendingInviteMessages.delete(entityKeyObj.ID), 15000);
+                    // Auto-clear after 15 seconds in case DraftMessages is never read.
+                    const timer = setTimeout(() => _pendingInviteMessages.delete(entityKeyObj.ID), 15000);
+                    if (typeof timer.unref === 'function')
+                        timer.unref();
                 }
             }
             try {
@@ -753,7 +782,7 @@ function registerHandlers(srv, collaborativeEntities) {
                     .data({ InProcessByUser: '' })
                     .where({ DraftUUID: draftUUID }));
                 try {
-                    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['S', draftUUID]);
+                    await _setSharedDraft(draftUUID);
                 }
                 catch (err) {
                     LOG.debug('Could not set DraftAccessType in ColDraftShare:', err.message);

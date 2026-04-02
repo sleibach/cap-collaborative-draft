@@ -78,7 +78,7 @@ describe('Collaborative Draft — Join existing draft', () => {
   })
 
   test('Presence module — join and check participants', async () => {
-    const presence = require('../../lib/presence')
+    const presence = require('../../dist/lib/presence')
     const draftUUID = cds.utils.uuid()
 
     // User A joins as originator
@@ -110,7 +110,7 @@ describe('Collaborative Draft — Join existing draft', () => {
   })
 
   test('Non-originator leaves — draft remains', async () => {
-    const presence = require('../../lib/presence')
+    const presence = require('../../dist/lib/presence')
     const draftUUID = cds.utils.uuid()
 
     await presence.join(draftUUID, 'alice', { displayName: 'Alice', isOriginator: true })
@@ -125,7 +125,7 @@ describe('Collaborative Draft — Join existing draft', () => {
   })
 
   test('Heartbeat updates lastSeen timestamp', async () => {
-    const presence = require('../../lib/presence')
+    const presence = require('../../dist/lib/presence')
     const draftUUID = cds.utils.uuid()
 
     await presence.join(draftUUID, 'alice', { displayName: 'Alice', isOriginator: true })

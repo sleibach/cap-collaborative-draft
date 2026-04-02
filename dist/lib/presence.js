@@ -12,6 +12,7 @@ exports.isParticipant = isParticipant;
 exports.isOriginator = isOriginator;
 exports.loadFromDB = loadFromDB;
 const cds = require("@sap/cds");
+const config_1 = require("./config");
 const LOG = cds.log('collab-draft');
 // Default TTL for participants (5 minutes of inactivity)
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -28,7 +29,7 @@ let _cleanupTimer = null;
  * Get TTL from config or use default
  */
 function getTtlMs() {
-    return cds.env.collab?.presenceTtlMs ?? DEFAULT_TTL_MS;
+    return (0, config_1.collabConfig)().presenceTtlMs ?? DEFAULT_TTL_MS;
 }
 /**
  * Starts the periodic cleanup of stale participants.

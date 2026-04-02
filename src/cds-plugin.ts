@@ -659,23 +659,29 @@ cds.on('served', async (services: Record<string, any>) => {
         }
       }
 
-      for (const viewName of draftAdminTables) {
-        if (viewName === 'DRAFT_DraftAdministrativeData') continue
-        try {
-          const rows: any = await db.run(`SELECT sql FROM sqlite_master WHERE type='view' AND name='${viewName}'`)
-          const viewSql: string | undefined = Array.isArray(rows) ? rows[0]?.sql : rows?.sql
-          if (!viewSql) continue
+      // View recreation reads sqlite_master — SQLite only.
+      // On other databases the collaborative columns are handled differently (or the
+      // ALTER TABLE above is enough because the service view is re-created by the DB adapter).
+      const isSQLite = ((cds.env as any)?.requires?.db?.kind ?? 'sqlite') === 'sqlite'
+      if (isSQLite) {
+        for (const viewName of draftAdminTables) {
+          if (viewName === 'DRAFT_DraftAdministrativeData') continue
+          try {
+            const rows: any = await db.run(`SELECT sql FROM sqlite_master WHERE type='view' AND name='${viewName}'`)
+            const viewSql: string | undefined = Array.isArray(rows) ? rows[0]?.sql : rows?.sql
+            if (!viewSql) continue
 
-          if (viewSql.includes('CollaborativeDraftEnabled')) continue
+            if (viewSql.includes('CollaborativeDraftEnabled')) continue
 
-          const updatedViewSql = viewSql.replace(
-            /\bFROM\b/i,
-            `,\n  DraftAdministrativeData.CollaborativeDraftEnabled,\n  DraftAdministrativeData.DraftAccessType\nFROM`
-          )
-          await db.run(`DROP VIEW IF EXISTS ${viewName}`)
-          await db.run(updatedViewSql)
-        } catch (err: any) {
-          LOG.debug(`Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`)
+            const updatedViewSql = viewSql.replace(
+              /\bFROM\b/i,
+              `,\n  DraftAdministrativeData.CollaborativeDraftEnabled,\n  DraftAdministrativeData.DraftAccessType\nFROM`
+            )
+            await db.run(`DROP VIEW IF EXISTS ${viewName}`)
+            await db.run(updatedViewSql)
+          } catch (err: any) {
+            LOG.debug(`Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`)
+          }
         }
       }
     } catch (err: any) {

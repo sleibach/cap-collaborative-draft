@@ -1,6 +1,7 @@
 'use strict'
 
 import cds = require('@sap/cds')
+import { collabConfig } from './config'
 
 const LOG = cds.log('collab-draft')
 
@@ -35,7 +36,7 @@ let _cleanupTimer: ReturnType<typeof setInterval> | null = null
  * Get TTL from config or use default
  */
 function getTtlMs(): number {
-  return (cds.env as any).collab?.presenceTtlMs ?? DEFAULT_TTL_MS
+  return collabConfig().presenceTtlMs ?? DEFAULT_TTL_MS
 }
 
 /**

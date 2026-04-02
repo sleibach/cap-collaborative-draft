@@ -1,6 +1,7 @@
 'use strict'
 
 import cds = require('@sap/cds')
+import { collabConfig } from './config'
 
 const LOG = cds.log('collab-draft')
 
@@ -26,7 +27,7 @@ export interface AcquireLocksResult {
  * Get lock TTL from config or use default
  */
 export function getLockTtlMs(): number {
-  return (cds.env as any).collab?.fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS
+  return collabConfig().fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS
 }
 
 /**
@@ -91,8 +92,8 @@ export async function acquireLock(opts: {
     return { acquired: true }
   } catch (err: any) {
     LOG.warn('Failed to acquire field lock:', err.message)
-    // On DB error, be permissive — don't block the user
-    return { acquired: true }
+    // On DB error, deny the lock — a failed lock check must not silently grant access.
+    return { acquired: false }
   }
 }
 
@@ -166,7 +167,8 @@ export async function acquireLocks(opts: {
     return { acquired: true, conflicts: [] }
   } catch (err: any) {
     LOG.warn('Failed to acquire field locks:', err.message)
-    return { acquired: true, conflicts: [] }
+    // On DB error, deny all locks — a failed lock check must not silently grant access.
+    return { acquired: false, conflicts: [] }
   }
 }
 

@@ -9,6 +9,7 @@ exports.getActiveLocks = getActiveLocks;
 exports.extractPatchedFields = extractPatchedFields;
 exports.serializeEntityKey = serializeEntityKey;
 const cds = require("@sap/cds");
+const config_1 = require("./config");
 const LOG = cds.log('collab-draft');
 // Default lock TTL (120 seconds)
 const DEFAULT_LOCK_TTL_MS = 120 * 1000;
@@ -16,7 +17,7 @@ const DEFAULT_LOCK_TTL_MS = 120 * 1000;
  * Get lock TTL from config or use default
  */
 function getLockTtlMs() {
-    return cds.env.collab?.fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS;
+    return (0, config_1.collabConfig)().fieldLockTtlMs ?? DEFAULT_LOCK_TTL_MS;
 }
 /**
  * Attempts to acquire a lock on a field for a user.
@@ -64,8 +65,8 @@ async function acquireLock(opts) {
     }
     catch (err) {
         LOG.warn('Failed to acquire field lock:', err.message);
-        // On DB error, be permissive — don't block the user
-        return { acquired: true };
+        // On DB error, deny the lock — a failed lock check must not silently grant access.
+        return { acquired: false };
     }
 }
 /**
@@ -123,7 +124,8 @@ async function acquireLocks(opts) {
     }
     catch (err) {
         LOG.warn('Failed to acquire field locks:', err.message);
-        return { acquired: true, conflicts: [] };
+        // On DB error, deny all locks — a failed lock check must not silently grant access.
+        return { acquired: false, conflicts: [] };
     }
 }
 /**

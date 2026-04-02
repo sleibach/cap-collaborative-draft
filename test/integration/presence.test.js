@@ -1,7 +1,7 @@
 'use strict'
 
 const cds = require('@sap/cds')
-const presence = require('../../lib/presence')
+const presence = require('../../dist/lib/presence')
 
 cds.test(__dirname + '/../app')
 
