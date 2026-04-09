@@ -82,7 +82,8 @@ async function join(draftUUID, userID, opts = {}) {
     participants.set(userID, {
         displayName,
         lastSeen: Date.now(),
-        isOriginator: existing?.isOriginator ?? isOriginator
+        isOriginator: existing?.isOriginator ?? isOriginator,
+        hasPatched: existing?.hasPatched ?? false
     });
     LOG.debug(`Participant joined: ${userID} → draft ${draftUUID} (originator=${isOriginator})`);
     // Persist to DB
@@ -90,8 +91,9 @@ async function join(draftUUID, userID, opts = {}) {
 }
 /**
  * Updates a participant's lastSeen timestamp (heartbeat).
+ * Pass patched=true when called from a PATCH handler to mark that this user has made changes.
  */
-async function heartbeat(draftUUID, userID, displayName) {
+async function heartbeat(draftUUID, userID, displayName, patched) {
     const participants = exports._store.get(draftUUID);
     if (!participants)
         return;
@@ -101,6 +103,8 @@ async function heartbeat(draftUUID, userID, displayName) {
     p.lastSeen = Date.now();
     if (displayName)
         p.displayName = displayName;
+    if (patched)
+        p.hasPatched = true;
     // Update DB
     await _upsertParticipantInDB(draftUUID, userID, p.displayName, p.isOriginator);
 }
@@ -141,7 +145,8 @@ function getParticipants(draftUUID) {
         userID,
         displayName: info.displayName,
         lastSeen: new Date(info.lastSeen),
-        isOriginator: info.isOriginator
+        isOriginator: info.isOriginator,
+        hasPatched: info.hasPatched
     }));
 }
 /**
@@ -168,7 +173,8 @@ async function loadFromDB() {
             exports._store.get(row.DraftUUID).set(row.UserID, {
                 displayName: row.UserDescription || row.UserID,
                 lastSeen: row.LastSeenAt ? new Date(row.LastSeenAt).getTime() : Date.now(),
-                isOriginator: row.IsOriginator === true || row.IsOriginator === 1
+                isOriginator: row.IsOriginator === true || row.IsOriginator === 1,
+                hasPatched: false // unknown after restart; will be set to true on next PATCH
             });
         }
         if (rows.length > 0)

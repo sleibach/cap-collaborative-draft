@@ -17,7 +17,7 @@ const LOG = cds.log('collab-draft')
 async function _setSharedDraft(draftUUID: string): Promise<void> {
   await (cds as any).db.run(
     'UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?',
-    ['S', draftUUID]
+    ['3', draftUUID]
   )
 }
 
@@ -367,7 +367,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       const isCollab = await _isDraftCollaborative(draftUUID)
       if (!isCollab) return
 
-      await presence.heartbeat(draftUUID, req.user.id, getUserDisplayName(req))
+      await presence.heartbeat(draftUUID, req.user.id, getUserDisplayName(req), true)
 
       const { acquired, conflicts } = await fieldLocks.acquireLocks({
         draftUUID,
@@ -531,7 +531,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
       row.CollaborativeDraftEnabled =
         row.CollaborativeDraftEnabled === true ||
         row.CollaborativeDraftEnabled === 1 ||
-        row.DraftAccessType === 'S' ||
+        row.DraftAccessType === '3' ||
         presence.getParticipants(draftUUID).length > 0
 
       if (row.InProcessByUser === null || row.InProcessByUser === undefined) row.InProcessByUser = ''
@@ -627,7 +627,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
           DraftUUID: draftUUID,
           UserID: p.userID || 'unknown',
           UserDescription: mockedUsers[p.userID]?.displayName || p.displayName || p.userID || 'Unknown User',
-          UserEditingState: 'P'
+          UserEditingState: p.hasPatched ? 'P' : 'N'
         }))
     }
 
@@ -650,7 +650,8 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
             DraftUUID: draftUUID,
             UserID: r.UserID || 'unknown',
             UserDescription: r.UserDescription || r.UserID || 'Unknown User',
-            UserEditingState: 'P'
+            // After a server restart hasPatched is unknown — default to 'N' (no changes detected yet)
+            UserEditingState: 'N'
           }))
       }
     } catch (err: any) {
@@ -911,7 +912,7 @@ async function _isDraftCollaborative(draftUUID: string): Promise<boolean> {
       [draftUUID]
     )
     const accessType = Array.isArray(rows) ? rows[0]?.DraftAccessType : rows?.DraftAccessType
-    if (accessType === 'S') return true
+    if (accessType === '3') return true
   } catch (_err) { /* fall through */ }
 
   if (presence.getParticipants(draftUUID).length > 0) return true

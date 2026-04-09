@@ -2,12 +2,14 @@ interface ParticipantEntry {
     displayName: string;
     lastSeen: number;
     isOriginator: boolean;
+    hasPatched: boolean;
 }
 export interface ParticipantRecord {
     userID: string;
     displayName: string;
     lastSeen: Date;
     isOriginator: boolean;
+    hasPatched: boolean;
 }
 /**
  * In-memory participant store:
@@ -32,8 +34,9 @@ export declare function join(draftUUID: string, userID: string, opts?: {
 }): Promise<void>;
 /**
  * Updates a participant's lastSeen timestamp (heartbeat).
+ * Pass patched=true when called from a PATCH handler to mark that this user has made changes.
  */
-export declare function heartbeat(draftUUID: string, userID: string, displayName?: string): Promise<void>;
+export declare function heartbeat(draftUUID: string, userID: string, displayName?: string, patched?: boolean): Promise<void>;
 /**
  * Removes a participant from the store (explicit leave).
  */

@@ -48,7 +48,7 @@ const LOG = cds.log('collab-draft');
 // via ALTER TABLE (not in the CDS model) and are therefore not reachable via
 // the CDS fluent query API.
 async function _setSharedDraft(draftUUID) {
-    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['S', draftUUID]);
+    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['3', draftUUID]);
 }
 async function _getCreatedByUser(draftUUID) {
     const rows = await cds.db.run('SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?', [draftUUID]);
@@ -358,7 +358,7 @@ function registerHandlers(srv, collaborativeEntities) {
             const isCollab = await _isDraftCollaborative(draftUUID);
             if (!isCollab)
                 return;
-            await presence.heartbeat(draftUUID, req.user.id, getUserDisplayName(req));
+            await presence.heartbeat(draftUUID, req.user.id, getUserDisplayName(req), true);
             const { acquired, conflicts } = await fieldLocks.acquireLocks({
                 draftUUID,
                 entityName,
@@ -510,7 +510,7 @@ function registerHandlers(srv, collaborativeEntities) {
             row.CollaborativeDraftEnabled =
                 row.CollaborativeDraftEnabled === true ||
                     row.CollaborativeDraftEnabled === 1 ||
-                    row.DraftAccessType === 'S' ||
+                    row.DraftAccessType === '3' ||
                     presence.getParticipants(draftUUID).length > 0;
             if (row.InProcessByUser === null || row.InProcessByUser === undefined)
                 row.InProcessByUser = '';
@@ -602,7 +602,7 @@ function registerHandlers(srv, collaborativeEntities) {
                 DraftUUID: draftUUID,
                 UserID: p.userID || 'unknown',
                 UserDescription: mockedUsers[p.userID]?.displayName || p.displayName || p.userID || 'Unknown User',
-                UserEditingState: 'P'
+                UserEditingState: p.hasPatched ? 'P' : 'N'
             }));
         }
         try {
@@ -622,7 +622,8 @@ function registerHandlers(srv, collaborativeEntities) {
                     DraftUUID: draftUUID,
                     UserID: r.UserID || 'unknown',
                     UserDescription: r.UserDescription || r.UserID || 'Unknown User',
-                    UserEditingState: 'P'
+                    // After a server restart hasPatched is unknown — default to 'N' (no changes detected yet)
+                    UserEditingState: 'N'
                 }));
             }
         }
@@ -843,7 +844,7 @@ async function _isDraftCollaborative(draftUUID) {
     try {
         const rows = await cds.db.run(`SELECT DraftAccessType FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
         const accessType = Array.isArray(rows) ? rows[0]?.DraftAccessType : rows?.DraftAccessType;
-        if (accessType === 'S')
+        if (accessType === '3')
             return true;
     }
     catch (_err) { /* fall through */ }

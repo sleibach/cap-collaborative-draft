@@ -1,6 +1,11 @@
 node_modules/
 test-results/
 
+# UI5 scout — fetched CDN files (regenerate with: node scripts/scout-ui5.mjs)
+ui5-snippets/*-cdn.js
+ui5-snippets/META.json
+scripts/scout-ui5.mjs
+
 # AI
 Claude.md
 CLAUDE_BOTTOM_UP_PROMPT.md

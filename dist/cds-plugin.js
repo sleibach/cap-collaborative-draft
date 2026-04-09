@@ -439,7 +439,7 @@ cds.on('bootstrap', (app) => {
                 return next();
             const adminRows = await db.run(`SELECT DraftAccessType FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
             const accessType = Array.isArray(adminRows) ? adminRows[0]?.DraftAccessType : adminRows?.DraftAccessType;
-            if (accessType !== 'S')
+            if (accessType !== '3')
                 return next();
             await db.run(`UPDATE DRAFT_DraftAdministrativeData SET InProcessByUser = ? WHERE DraftUUID = ?`, [userID, draftUUID]);
             LOG.debug(`Pre-set InProcessByUser=${userID} for collaborative draft ${draftUUID}`);
@@ -508,6 +508,33 @@ cds.on('served', async (services) => {
                             ws._collabDraft = qo.draft || null;
                             LOG.debug(`WS connected: no userID in queryOptions (keys: ${Object.keys(qo).join(',')})`);
                         }
+                        // ── Relay LEAVE when the socket closes ──────────────────────────────
+                        // FE calls endCollaboration() which closes the WebSocket without sending
+                        // an explicit LEAVE message. We detect the close here and broadcast LEAVE
+                        // so other participants' avatar groups update in real time.
+                        ws.on('close', async () => {
+                            const closedUser = ws._collabUser;
+                            const closedDraft = ws._collabDraft;
+                            if (!closedUser?.id || !closedDraft)
+                                return;
+                            try {
+                                await presence.leave(closedDraft, closedUser.id);
+                                await wsService.emit('message', {
+                                    userAction: 'LEAVE',
+                                    clientAction: 'LEAVE',
+                                    clientContent: '',
+                                    clientTriggeredActionName: '',
+                                    clientRefreshListBinding: '',
+                                    clientRequestedProperties: '',
+                                    userID: closedUser.id,
+                                    userDescription: closedUser.name || closedUser.id
+                                });
+                                LOG.debug(`WS close: relayed LEAVE for ${closedUser.id} (draft=${closedDraft})`);
+                            }
+                            catch (e) {
+                                LOG.debug(`WS close LEAVE relay error: ${e.message}`);
+                            }
+                        });
                     }
                     catch (e) {
                         LOG.debug('wsConnect tagging error:', e.message);

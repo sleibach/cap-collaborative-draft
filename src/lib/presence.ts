@@ -14,6 +14,7 @@ interface ParticipantEntry {
   displayName: string
   lastSeen: number
   isOriginator: boolean
+  hasPatched: boolean
 }
 
 export interface ParticipantRecord {
@@ -21,6 +22,7 @@ export interface ParticipantRecord {
   displayName: string
   lastSeen: Date
   isOriginator: boolean
+  hasPatched: boolean
 }
 
 /**
@@ -98,7 +100,8 @@ export async function join(
   participants.set(userID, {
     displayName,
     lastSeen: Date.now(),
-    isOriginator: existing?.isOriginator ?? isOriginator
+    isOriginator: existing?.isOriginator ?? isOriginator,
+    hasPatched: existing?.hasPatched ?? false
   })
 
   LOG.debug(`Participant joined: ${userID} → draft ${draftUUID} (originator=${isOriginator})`)
@@ -109,8 +112,9 @@ export async function join(
 
 /**
  * Updates a participant's lastSeen timestamp (heartbeat).
+ * Pass patched=true when called from a PATCH handler to mark that this user has made changes.
  */
-export async function heartbeat(draftUUID: string, userID: string, displayName?: string): Promise<void> {
+export async function heartbeat(draftUUID: string, userID: string, displayName?: string, patched?: boolean): Promise<void> {
   const participants = _store.get(draftUUID)
   if (!participants) return
   const p = participants.get(userID)
@@ -118,6 +122,7 @@ export async function heartbeat(draftUUID: string, userID: string, displayName?:
 
   p.lastSeen = Date.now()
   if (displayName) p.displayName = displayName
+  if (patched) p.hasPatched = true
 
   // Update DB
   await _upsertParticipantInDB(draftUUID, userID, p.displayName, p.isOriginator)
@@ -162,7 +167,8 @@ export function getParticipants(draftUUID: string): ParticipantRecord[] {
     userID,
     displayName: info.displayName,
     lastSeen: new Date(info.lastSeen),
-    isOriginator: info.isOriginator
+    isOriginator: info.isOriginator,
+    hasPatched: info.hasPatched
   }))
 }
 
@@ -191,7 +197,8 @@ export async function loadFromDB(): Promise<void> {
       _store.get(row.DraftUUID)!.set(row.UserID, {
         displayName: row.UserDescription || row.UserID,
         lastSeen: row.LastSeenAt ? new Date(row.LastSeenAt).getTime() : Date.now(),
-        isOriginator: row.IsOriginator === true || row.IsOriginator === 1
+        isOriginator: row.IsOriginator === true || row.IsOriginator === 1,
+        hasPatched: false  // unknown after restart; will be set to true on next PATCH
       })
     }
     if (rows.length > 0) LOG.debug(`Loaded ${rows.length} participants from DB`)
