@@ -1,6 +1,6 @@
 {
   "name": "cap-collaborative-draft",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A cds-plugin that enables SAP Fiori Elements Collaborative Draft on CAP Node.js backends",
   "main": "cds-plugin.js",
   "license": "Apache-2.0",
