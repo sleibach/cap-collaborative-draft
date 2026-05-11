@@ -4,6 +4,15 @@
   "description": "A cds-plugin that enables SAP Fiori Elements Collaborative Draft on CAP Node.js backends",
   "main": "cds-plugin.js",
   "license": "Apache-2.0",
+  "author": "Soeren Leibach",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sleibach/cap-collaborative-draft.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sleibach/cap-collaborative-draft/issues"
+  },
+  "homepage": "https://github.com/sleibach/cap-collaborative-draft#readme",
   "engines": {
     "node": ">=18"
   },

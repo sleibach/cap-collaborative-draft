@@ -74,12 +74,19 @@ This plugin replicates the full OData contract on CAP Node.js, allowing Fiori El
 ## Installation
 
 ```bash
-npm add https://github.com/sleibach/cap-collaborative-draft
+npm add cap-collaborative-draft
 ```
 
-> **Note:** This package is not yet published to the npm registry. Install directly from GitHub for now. npm publication is planned for a future release.
+Or pin to an exact version (recommended while the API is still under active development — see the notice at the top of this README):
+
+```bash
+npm add cap-collaborative-draft@1.0.0
+```
 
 The plugin is auto-discovered by CAP via the `cds-plugin.js` convention. No additional wiring, service registration, or `cds.serve()` call is required.
+
+**Source:** [github.com/sleibach/cap-collaborative-draft](https://github.com/sleibach/cap-collaborative-draft)
+**npm:** [npmjs.com/package/cap-collaborative-draft](https://www.npmjs.com/package/cap-collaborative-draft)
 
 **Peer dependency:** `@sap/cds >= 8.0`
 

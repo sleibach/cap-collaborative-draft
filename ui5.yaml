@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://sap.github.io/ui5-tooling/schema/ui5.yaml.json
+
+# Minimal UI5 tooling descriptor for this CAP plugin.
+#
+# `cap-collaborative-draft` is a server-side `cds-plugin` and does not ship UI5
+# tasks, middlewares, or a UI5 module. This file exists so that tooling that
+# scans for `ui5.yaml` (e.g. bestofcapjs crawler) can identify the project.
+#
+# UI5 building blocks (CollaborationDraft, CollaborationDiscardDialog, ...)
+# are distributed as copy-and-paste TypeScript snippets under `ui5-snippets/`,
+# not as a versioned UI5 module.
+specVersion: "3.0"
+metadata:
+  name: cap-collaborative-draft
+type: module
