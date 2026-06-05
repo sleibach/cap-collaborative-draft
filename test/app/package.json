@@ -6,16 +6,20 @@
   "scripts": {
     "start": "cds-serve",
     "dev": "cds watch",
-    "watch-orders": "cds watch --open orders/webapp/test/flpSandbox.html?sap-ui-xx-viewCache=false&useFLPUser=true"
+    "watch-orders": "cds watch --open orders/webapp/test/flpSandbox.html?sap-ui-xx-viewCache=false&useFLPUser=true",
+    "hana:deploy": "cds deploy --to hana --profile hana",
+    "hana:env": "cds env requires.db --profile hana"
   },
+  "_comment_cds": "This test app is nested inside the plugin repo and is linked via 'file:../..'. It deliberately does NOT depend on @sap/cds directly: doing so installs a second @sap/cds instance under test/app/node_modules, which makes the linked plugin's cds.on('loaded') hook register on a different @sap/cds singleton than the one the CLI/app uses (dual-package hazard). The app instead resolves the plugin's @sap/cds (one directory up), so plugin + app + CLI all share a single instance and the model augmentation fires. Real npm consumers don't hit this because the plugin's @sap/cds is a peerDependency resolved from the host app.",
   "dependencies": {
     "@cap-js-community/websocket": "^1.10.0",
     "@cap-js/sqlite": "^2.2.0",
-    "@sap/cds": "^9.8.4",
     "cap-collaborative-draft": "file:../.."
   },
   "devDependencies": {
-    "@sap/cds-dk": "^9.8.2"
+    "@cap-js/hana": "^2.8.0",
+    "@sap/cds-dk": "^9.8.2",
+    "@sap/hana-client": "^2.28.21"
   },
   "cds": {
     "requires": {
@@ -23,6 +27,10 @@
         "kind": "sqlite",
         "credentials": {
           "url": ":memory:"
+        },
+        "[hana]": {
+          "kind": "hana",
+          "deploy-format": "hdbtable"
         }
       },
       "auth": {

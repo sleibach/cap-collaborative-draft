@@ -42,13 +42,23 @@ const fieldLocks = __importStar(require("./field-locks"));
 const merge = __importStar(require("./merge"));
 const config_1 = require("./config");
 const LOG = cds.log('collab-draft');
-// ── Private raw-SQL helpers ─────────────────────────────────────────────────
-// These target the physical DRAFT_DraftAdministrativeData table directly
-// because the columns CollaborativeDraftEnabled and DraftAccessType are added
-// via ALTER TABLE (not in the CDS model) and are therefore not reachable via
-// the CDS fluent query API.
+// ── Private helpers ─────────────────────────────────────────────────────────
+// Collaborative per-draft state (CollaborativeDraftEnabled / DraftAccessType) lives in the
+// plugin-owned DRAFT.CollaborativeDraftState table — NOT on the CAP-generated
+// DRAFT_DraftAdministrativeData table. That table's columns cannot be extended via the model,
+// and adding them via runtime ALTER TABLE fails on HANA/HDI (no DDL privileges). Using a normal
+// modeled entity keeps everything portable and accessible via the CDS query API.
 async function _setSharedDraft(draftUUID) {
-    await cds.db.run('UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?', ['3', draftUUID]);
+    await cds.run(UPSERT.into('DRAFT.CollaborativeDraftState').entries({
+        DraftUUID: draftUUID,
+        DraftAccessType: '3',
+        CollaborativeDraftEnabled: true
+    }));
+}
+/** Reads the persisted DraftAccessType for a draft, or undefined if no state row exists. */
+async function _getDraftAccessType(draftUUID) {
+    const row = await cds.run(SELECT.one.from('DRAFT.CollaborativeDraftState').columns('DraftAccessType').where({ DraftUUID: draftUUID }));
+    return row?.DraftAccessType ?? undefined;
 }
 async function _getCreatedByUser(draftUUID) {
     const rows = await cds.db.run('SELECT CreatedByUser FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?', [draftUUID]);
@@ -506,11 +516,19 @@ function registerHandlers(srv, collaborativeEntities) {
             if (!row?.DraftUUID)
                 continue;
             const draftUUID = row.DraftUUID;
-            // Always coerce to boolean (SQLite stores booleans as 0/1 integers)
+            // CollaborativeDraftEnabled / DraftAccessType are virtual on DraftAdministrativeData.
+            // Populate them from the DRAFT.CollaborativeDraftState companion table.
+            let accessType;
+            try {
+                accessType = await _getDraftAccessType(draftUUID);
+            }
+            catch (err) {
+                LOG.debug('Could not read CollaborativeDraftState:', err.message);
+            }
+            if (accessType !== undefined)
+                row.DraftAccessType = accessType;
             row.CollaborativeDraftEnabled =
-                row.CollaborativeDraftEnabled === true ||
-                    row.CollaborativeDraftEnabled === 1 ||
-                    row.DraftAccessType === '3' ||
+                accessType === '3' ||
                     presence.getParticipants(draftUUID).length > 0;
             if (row.InProcessByUser === null || row.InProcessByUser === undefined)
                 row.InProcessByUser = '';
@@ -842,9 +860,7 @@ function registerHandlers(srv, collaborativeEntities) {
  */
 async function _isDraftCollaborative(draftUUID) {
     try {
-        const rows = await cds.db.run(`SELECT DraftAccessType FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID]);
-        const accessType = Array.isArray(rows) ? rows[0]?.DraftAccessType : rows?.DraftAccessType;
-        if (accessType === '3')
+        if (await _getDraftAccessType(draftUUID) === '3')
             return true;
     }
     catch (_err) { /* fall through */ }

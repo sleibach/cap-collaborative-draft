@@ -8,17 +8,29 @@ import { collabConfig } from './config'
 
 const LOG = cds.log('collab-draft')
 
-// ── Private raw-SQL helpers ─────────────────────────────────────────────────
-// These target the physical DRAFT_DraftAdministrativeData table directly
-// because the columns CollaborativeDraftEnabled and DraftAccessType are added
-// via ALTER TABLE (not in the CDS model) and are therefore not reachable via
-// the CDS fluent query API.
+// ── Private helpers ─────────────────────────────────────────────────────────
+// Collaborative per-draft state (CollaborativeDraftEnabled / DraftAccessType) lives in the
+// plugin-owned DRAFT.CollaborativeDraftState table — NOT on the CAP-generated
+// DRAFT_DraftAdministrativeData table. That table's columns cannot be extended via the model,
+// and adding them via runtime ALTER TABLE fails on HANA/HDI (no DDL privileges). Using a normal
+// modeled entity keeps everything portable and accessible via the CDS query API.
 
 async function _setSharedDraft(draftUUID: string): Promise<void> {
-  await (cds as any).db.run(
-    'UPDATE DRAFT_DraftAdministrativeData SET DraftAccessType = ?, CollaborativeDraftEnabled = 1 WHERE DraftUUID = ?',
-    ['3', draftUUID]
+  await cds.run(
+    UPSERT.into('DRAFT.CollaborativeDraftState').entries({
+      DraftUUID: draftUUID,
+      DraftAccessType: '3',
+      CollaborativeDraftEnabled: true
+    })
   )
+}
+
+/** Reads the persisted DraftAccessType for a draft, or undefined if no state row exists. */
+async function _getDraftAccessType(draftUUID: string): Promise<string | undefined> {
+  const row: any = await cds.run(
+    SELECT.one.from('DRAFT.CollaborativeDraftState').columns('DraftAccessType').where({ DraftUUID: draftUUID })
+  )
+  return row?.DraftAccessType ?? undefined
 }
 
 async function _getCreatedByUser(draftUUID: string): Promise<string | null> {
@@ -527,11 +539,18 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
 
       const draftUUID: string = row.DraftUUID
 
-      // Always coerce to boolean (SQLite stores booleans as 0/1 integers)
+      // CollaborativeDraftEnabled / DraftAccessType are virtual on DraftAdministrativeData.
+      // Populate them from the DRAFT.CollaborativeDraftState companion table.
+      let accessType: string | undefined
+      try {
+        accessType = await _getDraftAccessType(draftUUID)
+      } catch (err: any) {
+        LOG.debug('Could not read CollaborativeDraftState:', err.message)
+      }
+      if (accessType !== undefined) row.DraftAccessType = accessType
+
       row.CollaborativeDraftEnabled =
-        row.CollaborativeDraftEnabled === true ||
-        row.CollaborativeDraftEnabled === 1 ||
-        row.DraftAccessType === '3' ||
+        accessType === '3' ||
         presence.getParticipants(draftUUID).length > 0
 
       if (row.InProcessByUser === null || row.InProcessByUser === undefined) row.InProcessByUser = ''
@@ -907,12 +926,7 @@ export function registerHandlers(srv: any, collaborativeEntities: Set<string>): 
  */
 async function _isDraftCollaborative(draftUUID: string): Promise<boolean> {
   try {
-    const rows: any = await (cds as any).db.run(
-      `SELECT DraftAccessType FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`,
-      [draftUUID]
-    )
-    const accessType = Array.isArray(rows) ? rows[0]?.DraftAccessType : rows?.DraftAccessType
-    if (accessType === '3') return true
+    if (await _getDraftAccessType(draftUUID) === '3') return true
   } catch (_err) { /* fall through */ }
 
   if (presence.getParticipants(draftUUID).length > 0) return true

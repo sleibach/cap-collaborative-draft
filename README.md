@@ -150,7 +150,7 @@ The plugin hooks into four distinct stages of the CAP bootstrap lifecycle.
 At raw CSN stage (before `cds.compile.for.nodejs`), the plugin:
 
 1. Scans `csn.definitions` for all service entities that carry both `@CollaborativeDraft.enabled: true` and `@odata.draft.enabled`. Only entities with a `query` or `projection` property are considered (i.e., service projections — not bare database entities).
-2. Creates `DRAFT.DraftParticipants` and `DRAFT.DraftFieldLocks` entity definitions in the raw CSN if they do not already exist, causing CDS to deploy the corresponding database tables alongside the standard draft tables.
+2. Creates `DRAFT.DraftParticipants`, `DRAFT.DraftFieldLocks` and `DRAFT.CollaborativeDraftState` entity definitions in the raw CSN if they do not already exist, causing CDS to deploy the corresponding database tables alongside the standard draft tables. `DRAFT.CollaborativeDraftState` (keyed by `DraftUUID`) holds the per-draft collaborative state — `CollaborativeDraftEnabled` and `DraftAccessType`. Modeling this state as a normal entity (rather than adding columns to the compiler-owned `DRAFT_DraftAdministrativeData` table) means it is created by the regular deployment on **any** database, including SAP HANA Cloud / HDI where the runtime user has no DDL privileges.
 3. Adds `@Common.DraftRoot.ShareAction` annotation to each qualifying entity, naming the action `<EntityShortName>_ColDraftShare`.
 
 ### Phase 1 — Compiled Model Augmentation
@@ -159,7 +159,7 @@ At raw CSN stage (before `cds.compile.for.nodejs`), the plugin:
 
 After CDS compiles the model for Node.js, the plugin:
 
-1. Adds `CollaborativeDraftEnabled: Boolean` and `DraftAccessType: String(1)` to the `DRAFT.DraftAdministrativeData` element map (and all service-projected copies of it). These fields are readable via OData even though they are backed by columns added via DDL migration rather than a CDS `extend`.
+1. Adds `CollaborativeDraftEnabled: Boolean` and `DraftAccessType: String(1)` to the `DRAFT.DraftAdministrativeData` element map (and all service-projected copies of it) as **virtual** OData properties. They are exposed in `$metadata` and the OData payload but are not physical columns of `DRAFT_DraftAdministrativeData`; the `after READ DraftAdministrativeData` handler populates them at read time from the `DRAFT.CollaborativeDraftState` table.
 2. Creates `DRAFT.DraftAdministrativeUser` as a virtual entity (no persistence) and adds it as a contained navigation property on `DraftAdministrativeData`. Fiori Elements reads this navigation property to display the participant avatar group.
 3. Creates `<ServiceNs>.ColDraftUsers` as a virtual entity for each service. This entity backs the user search value help in the invite dialog.
 4. Registers the `<EntityShortName>_ColDraftShare` bound action definition on each collaborative entity, including its `Users` (`Collection(ColDraftShareUser)`) parameter and `ShareAll`/`IsDeltaUpdate` flags.
@@ -198,7 +198,7 @@ Handlers are prepended before CAP's built-in lean-draft handlers so they execute
 | `before draftActivate` | Sets `InProcessByUser` to the current user so any participant can activate (not just the originator). |
 | `after draftActivate` | Cleans up all presence records and field locks for the draft UUID. |
 | `before CANCEL` | If the requesting user is the originator, the cancel proceeds for all participants. If a non-originator, removes only that participant from the presence store and returns HTTP 409 to keep the draft alive for others. |
-| `after READ DraftAdministrativeData` | Populates `CollaborativeDraftEnabled` (boolean) and `DraftAccessType` by inspecting the presence store and the DB record. Ensures the response always carries proper JSON booleans (not SQLite integers). |
+| `after READ DraftAdministrativeData` | Populates the virtual `CollaborativeDraftEnabled` (boolean) and `DraftAccessType` fields from the `DRAFT.CollaborativeDraftState` table and the presence store. Ensures the response always carries proper JSON booleans (not SQLite integers). |
 | `READ DraftAdministrativeUser` | Resolves participants from the in-memory presence store (with DB fallback) and maps them to the `{DraftUUID, UserID, UserDescription, UserEditingState}` shape expected by Fiori Elements. |
 | `READ ColDraftUsers` | Serves the user directory for the invite dialog value help. See [User Directory](#user-directory). |
 | `<EntityName>_ColDraftShare` | Handles the bound share action. On self-join (`ShareAll: true`, empty `Users`): registers the calling user as participant, sets `DraftAccessType = 'S'` and `CollaborativeDraftEnabled = 1`, broadcasts `CollaborativePresenceChanged` via WebSocket. On explicit invite (`Users` non-empty): additionally emits the `collab-draft:shareInvite` event for app code to send notifications, and queues `DraftMessages` feedback so FE shows a confirmation toast. |
@@ -504,6 +504,7 @@ The in-memory presence store (`lib/presence.ts`) is **per process**. In a horizo
 | `@sap/cds` | `>= 8.0` |
 | Node.js | `>= 18` |
 | `@cap-js/sqlite` | `>= 2.0` (development / testing) |
+| `@cap-js/hana` / SAP HANA Cloud | Supported (production). All plugin tables are part of the deployed model, so they are created by `cds deploy` / HDI deploy — no runtime DDL is executed. |
 | `@cap-js-community/websocket` | `>= 1.0` (optional, for real-time relay) |
 | Fiori Elements (`sap.fe.templates`) | `>= 1.120` (SAPUI5 1.120+) |
 
@@ -558,9 +559,44 @@ npm run build        # tsc
 ### Running tests
 
 ```bash
-npm test             # Jest integration tests
+npm test             # Jest integration tests (SQLite, in-memory)
 npx playwright test  # E2E browser tests (requires running test app)
 ```
+
+### Testing against SAP HANA (HDI)
+
+The plugin's persistence relies on tables being created by the **deployer**, never by
+runtime DDL — because an HDI container's runtime user has no DDL privileges. The
+following opt-in suite verifies that contract against a real HANA Cloud HDI container.
+
+```bash
+# 1. Provide an HDI service key (writes the gitignored test/app/default-env.json)
+#    Copy the service-key JSON to your clipboard, then:
+cd test/app && pbpaste | node ../../scripts/wrap-hana-binding.mjs && cd ../..
+
+# 2. Deploy the schema once (runs as the privileged deploy user via HDI)
+npm run hana:deploy
+
+# 3a. Run the smoke test (plain Node — recommended)
+npm run hana:smoke
+
+# 3b. …or the gated jest test (CI / environments with a healthy jest setup)
+npm run test:hana
+```
+
+What the suite asserts, connected as the **DML-only runtime user**:
+
+- the modeled `DRAFT.CollaborativeDraftState` table exists (created at deploy time) and is queryable,
+- the collaborative read/write round-trip works (the operation the old `ALTER TABLE` approach broke),
+- a raw `ALTER TABLE` is **rejected** with `insufficient privilege` — proving runtime DDL is impossible on HDI and that the modeled-table approach is required.
+
+The suite auto-skips unless `HANA_TEST=1` and `test/app/default-env.json` are present, so
+the default `npm test` stays on SQLite. Never commit the service key — `default-env.json`
+is gitignored.
+
+> **Note:** `npm run hana:smoke` is a plain-Node runner provided because the jest harness
+> can hang during database bootstrap in some local environments. `npm run test:hana` is the
+> equivalent jest test for CI.
 
 ---
 

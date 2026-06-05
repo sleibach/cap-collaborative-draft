@@ -23,6 +23,9 @@
     "test:watch": "jest --runInBand --watch",
     "test:e2e": "playwright test",
     "test:all": "npm test && npm run test:e2e",
+    "test:hana": "HANA_TEST=1 CDS_ENV=hana jest test/integration/hana-runtime.test.js --runInBand --forceExit",
+    "hana:smoke": "node scripts/hana-smoke.cjs",
+    "hana:deploy": "npm --prefix test/app run hana:deploy",
     "scout:ui5": "node scripts/scout-ui5.mjs",
     "scout:ui5:diff": "node scripts/scout-ui5.mjs --diff"
   },

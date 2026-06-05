@@ -447,9 +447,10 @@ cds.on('bootstrap', (app: any) => {
       }
       if (!draftUUID) return next()
 
-      const adminRows: any = await db.run(`SELECT DraftAccessType FROM DRAFT_DraftAdministrativeData WHERE DraftUUID = ?`, [draftUUID])
-      const accessType: string | undefined = Array.isArray(adminRows) ? adminRows[0]?.DraftAccessType : adminRows?.DraftAccessType
-      if (accessType !== '3') return next()
+      const stateRow: any = await db.run(
+        SELECT.one.from('DRAFT.CollaborativeDraftState').columns('DraftAccessType').where({ DraftUUID: draftUUID })
+      )
+      if (stateRow?.DraftAccessType !== '3') return next()
 
       await db.run(`UPDATE DRAFT_DraftAdministrativeData SET InProcessByUser = ? WHERE DraftUUID = ?`, [userID, draftUUID])
       LOG.debug(`Pre-set InProcessByUser=${userID} for collaborative draft ${draftUUID}`)
@@ -660,60 +661,19 @@ cds.on('served', async (services: Record<string, any>) => {
     }
   }
 
-  const draftAdminTables = new Set(['DRAFT_DraftAdministrativeData'])
-  for (const srv of Object.values<any>(services)) {
-    if (srv.entities?.DraftAdministrativeData) {
-      draftAdminTables.add(`${srv.name.replace(/\./g, '_')}_DraftAdministrativeData`)
-    }
-  }
-
-  setImmediate(async () => {
-    try {
-      const db: any = (cds as any).db
-      if (!db) return
-
-      for (const sql of [
-        `ALTER TABLE DRAFT_DraftAdministrativeData ADD COLUMN CollaborativeDraftEnabled BOOLEAN DEFAULT 0`,
-        `ALTER TABLE DRAFT_DraftAdministrativeData ADD COLUMN DraftAccessType NVARCHAR(1) DEFAULT ''`
-      ]) {
-        try {
-          await db.run(sql)
-        } catch (err: any) {
-          if (!err.message?.includes('duplicate column') && !err.message?.includes('already exists')) {
-            LOG.debug(`DDL migration skipped (${err.message?.slice(0, 60)})`)
-          }
-        }
-      }
-
-      // View recreation reads sqlite_master — SQLite only.
-      // On other databases the collaborative columns are handled differently (or the
-      // ALTER TABLE above is enough because the service view is re-created by the DB adapter).
-      const isSQLite = ((cds.env as any)?.requires?.db?.kind ?? 'sqlite') === 'sqlite'
-      if (isSQLite) {
-        for (const viewName of draftAdminTables) {
-          if (viewName === 'DRAFT_DraftAdministrativeData') continue
-          try {
-            const rows: any = await db.run(`SELECT sql FROM sqlite_master WHERE type='view' AND name='${viewName}'`)
-            const viewSql: string | undefined = Array.isArray(rows) ? rows[0]?.sql : rows?.sql
-            if (!viewSql) continue
-
-            if (viewSql.includes('CollaborativeDraftEnabled')) continue
-
-            const updatedViewSql = viewSql.replace(
-              /\bFROM\b/i,
-              `,\n  DraftAdministrativeData.CollaborativeDraftEnabled,\n  DraftAdministrativeData.DraftAccessType\nFROM`
-            )
-            await db.run(`DROP VIEW IF EXISTS ${viewName}`)
-            await db.run(updatedViewSql)
-          } catch (err: any) {
-            LOG.debug(`Could not recreate view ${viewName}: ${err.message?.slice(0, 80)}`)
-          }
-        }
-      }
-    } catch (err: any) {
-      LOG.warn('Could not run DDL migration for collaborative draft columns:', err.message)
-    }
-  })
+  // NOTE: We intentionally do NOT run any runtime DDL (ALTER TABLE / CREATE VIEW) here.
+  //
+  // Earlier versions added CollaborativeDraftEnabled / DraftAccessType to the CAP-generated
+  // DRAFT_DraftAdministrativeData table via `ALTER TABLE ... ADD COLUMN` at startup, and patched
+  // the SQLite service views to expose them. That only works on databases where the application's
+  // runtime user owns the schema (e.g. local SQLite). On SAP HANA Cloud behind an HDI container it
+  // fails twice over: the `ADD COLUMN` syntax is not valid HANA DDL, and even once corrected the
+  // runtime user has no DDL privileges on HDI-managed tables ("insufficient privilege").
+  //
+  // The collaborative state now lives in the plugin-owned, fully-modeled DRAFT.CollaborativeDraftState
+  // table (see model-augmenter), which is created by the regular deployment (cds deploy / HDI deploy)
+  // on every database. The two fields are exposed on DraftAdministrativeData as virtual OData
+  // properties and populated at read time from that table.
 
   setImmediate(async () => {
     try {

@@ -7,6 +7,7 @@
 /* eslint-disable no-var */
 declare var SELECT: any
 declare var INSERT: any
+declare var UPSERT: any
 declare var UPDATE: any
 declare var DELETE: any
 

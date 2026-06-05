@@ -106,9 +106,43 @@ function augmentModel(csn) {
             }
         };
     }
+    // 2b. Create DRAFT.CollaborativeDraftState entity if it doesn't exist.
+    //     This is a plugin-owned companion table keyed by DraftUUID that holds the
+    //     collaborative per-draft state (CollaborativeDraftEnabled, DraftAccessType).
+    //
+    //     IMPORTANT: We do NOT store these on the CAP-generated DRAFT_DraftAdministrativeData
+    //     table. That table's DDL is owned by @sap/cds-compiler and cannot be extended via the
+    //     model. The previous approach added the columns via runtime ALTER TABLE, which only
+    //     works on databases where the runtime user owns the schema (e.g. SQLite). On SAP HANA
+    //     Cloud / HDI the runtime user has no DDL privileges (and the ALTER TABLE syntax differs),
+    //     so runtime DDL fails ("insufficient privilege" / syntax error). By modeling the state in
+    //     a normal entity, the table is created by the regular deployment (cds deploy / HDI deploy
+    //     run by the privileged deployer) on every database.
+    if (!defs['DRAFT.CollaborativeDraftState']) {
+        defs['DRAFT.CollaborativeDraftState'] = {
+            kind: 'entity',
+            '@cds.persistence.skip': false,
+            elements: {
+                DraftUUID: {
+                    key: true,
+                    type: 'cds.UUID'
+                },
+                CollaborativeDraftEnabled: {
+                    type: 'cds.Boolean',
+                    default: { val: false }
+                },
+                DraftAccessType: {
+                    type: 'cds.String',
+                    length: 1
+                }
+            }
+        };
+    }
     // 3. NOTE: We do NOT pre-define DRAFT.DraftAdministrativeData in raw CSN.
-    //    CollaborativeDraftEnabled and DraftAccessType are added to the DB table via
-    //    ALTER TABLE DDL in cds-plugin.ts, and to $metadata XML via the $metadata middleware.
+    //    CollaborativeDraftEnabled and DraftAccessType are exposed on DraftAdministrativeData
+    //    as *virtual* OData properties (see augmentCompiledModel + the $metadata middleware) and
+    //    are populated at read time from DRAFT.CollaborativeDraftState. They are deliberately NOT
+    //    physical columns of DRAFT_DraftAdministrativeData.
     // 4. For each collaborative draft entity, add @Common.DraftRoot.ShareAction annotation
     for (const entityName of entities) {
         const entity = defs[entityName];
@@ -146,12 +180,17 @@ function augmentCompiledModel(model) {
         const obj = _linkedProto ? Object.create(_linkedProto) : {};
         return Object.assign(obj, props);
     }
-    // 0. Add CollaborativeDraftEnabled and DraftAccessType to DRAFT.DraftAdministrativeData
+    // 0. Add CollaborativeDraftEnabled and DraftAccessType to DRAFT.DraftAdministrativeData.
+    //    These are VIRTUAL: they are not physical columns of DRAFT_DraftAdministrativeData
+    //    (that table is owned by the compiler and cannot be extended). They are populated at
+    //    read time from the DRAFT.CollaborativeDraftState companion table by the after-READ
+    //    handler. Marking them virtual ensures the DB layer never SELECTs them from a column
+    //    that does not exist (which would fail on HANA and on any non-migrated SQLite db).
     if (!draftAdmin.elements.CollaborativeDraftEnabled) {
         draftAdmin.elements.CollaborativeDraftEnabled = {
             name: 'CollaborativeDraftEnabled',
             type: 'cds.Boolean',
-            virtual: false
+            virtual: true
         };
     }
     if (!draftAdmin.elements.DraftAccessType) {
@@ -159,7 +198,7 @@ function augmentCompiledModel(model) {
             name: 'DraftAccessType',
             type: 'cds.String',
             length: 1,
-            virtual: false
+            virtual: true
         };
     }
     // 1. Add DraftAdministrativeUser entity to the compiled model for OData navigation.
@@ -265,7 +304,7 @@ function augmentCompiledModel(model) {
                 def.elements.CollaborativeDraftEnabled = {
                     name: 'CollaborativeDraftEnabled',
                     type: 'cds.Boolean',
-                    virtual: false
+                    virtual: true
                 };
             }
             if (!def.elements.DraftAccessType) {
@@ -273,7 +312,7 @@ function augmentCompiledModel(model) {
                     name: 'DraftAccessType',
                     type: 'cds.String',
                     length: 1,
-                    virtual: false
+                    virtual: true
                 };
             }
             if (!def.elements.DraftAdministrativeUser) {

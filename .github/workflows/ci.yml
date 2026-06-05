@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ── Build + fast tests (SQLite). Runs everywhere, needs no credentials. ──
+  test:
+    name: Build & test (SQLite)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Plugin itself
+      - name: Install plugin deps
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build
+
+      # Test app (separate package, linked via file:../..). cds.test boots it,
+      # so its dependencies must be installed too. better-sqlite3 is built here
+      # against the runner's Node version.
+      - name: Install test-app deps
+        run: npm --prefix test/app ci
+
+      - name: Run tests
+        run: npm test
+
+  # ── Real HANA / HDI integration test. Needs the HANA_SERVICE_KEY secret. ──
+  hana:
+    name: HANA integration (HDI)
+    runs-on: ubuntu-latest
+    # Secrets are not available to PRs from forks; only run where the secret exists.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Serialize: the test deploys to and mutates a shared HDI container.
+    concurrency:
+      group: hana-integration
+      cancel-in-progress: false
+    env:
+      HANA_SERVICE_KEY: ${{ secrets.HANA_SERVICE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Skip if no HANA credentials configured
+        id: guard
+        run: |
+          if [ -z "$HANA_SERVICE_KEY" ]; then
+            echo "HANA_SERVICE_KEY secret not set — skipping HANA integration job."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install plugin deps
+        if: steps.guard.outputs.run == 'true'
+        run: npm ci
+
+      - name: Build (tsc)
+        if: steps.guard.outputs.run == 'true'
+        run: npm run build
+
+      - name: Install test-app deps
+        if: steps.guard.outputs.run == 'true'
+        run: npm --prefix test/app ci
+
+      - name: Write HDI binding from secret
+        if: steps.guard.outputs.run == 'true'
+        working-directory: test/app
+        run: printf '%s' "$HANA_SERVICE_KEY" | node ../../scripts/wrap-hana-binding.mjs
+
+      - name: Deploy schema to HANA (HDI)
+        if: steps.guard.outputs.run == 'true'
+        run: npm run hana:deploy
+
+      - name: Run HANA integration test
+        if: steps.guard.outputs.run == 'true'
+        run: npm run test:hana
